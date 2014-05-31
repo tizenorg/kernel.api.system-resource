@@ -1,0 +1,100 @@
+CMAKE_MINIMUM_REQUIRED (VERSION 2.6)
+
+PROJECT(resource_d)
+
+SET(CMAKE_EXTRA_INCLUDE_FILES unistd.h)
+
+INCLUDE_DIRECTORIES(${RESOURCED_INCLUDEDIR}
+  ${RESOURCED_SOURCE_DIR}
+  ${MEMORY_SOURCE_DIR}
+  ${PROC-STAT_SOURCE_DIR}/include)
+
+CONFIGURE_FILE(${INCLUDE_COMMON_DIR}/config.h.in
+  ${INCLUDE_COMMON_DIR}/config.h)
+
+SET (HEADERS
+  ${INCLUDE_COMMON_DIR}/config.h
+  ${INCLUDE_COMMON_DIR}/config-parser.h
+  ${INCLUDE_COMMON_DIR}/macro.h
+  ${INCLUDE_COMMON_DIR}/lowmem-common.h
+  ${INCLUDE_COMMON_DIR}/module.h
+  ${INCLUDE_COMMON_DIR}/const.h
+  ${INCLUDE_COMMON_DIR}/module-data.h
+  ${INCLUDE_COMMON_DIR}/cpu-common.h
+  )
+
+SET (SOURCES
+  ${COMMON_SOURCE_DIR}/config-parser.c
+  ${COMMON_SOURCE_DIR}/edbus-handler.c
+  ${COMMON_SOURCE_DIR}/file-helper.c
+  ${COMMON_SOURCE_DIR}/module-data.c
+  ${COMMON_SOURCE_DIR}/module.c
+  ${COMMON_SOURCE_DIR}/lowmem-common.c
+  ${COMMON_SOURCE_DIR}/cpu-common.c
+  ${PROC-STAT_SOURCE_DIR}/proc-handler.c
+  ${PROC-STAT_SOURCE_DIR}/proc-main.c
+  ${PROC-STAT_SOURCE_DIR}/proc-monitor.c
+  ${PROC-STAT_SOURCE_DIR}/proc-noti.c
+  ${PROC-STAT_SOURCE_DIR}/proc-process.c
+  ${PROC-STAT_SOURCE_DIR}/proc-winstate.c
+  ${RESOURCED_SOURCE_DIR}/init.c
+  ${RESOURCED_SOURCE_DIR}/main.c
+  )
+
+#memory module
+IF("${MEMORY_MODULE}" STREQUAL "ON")
+  SET(SOURCES ${SOURCES}
+    ${MEMORY_SOURCE_DIR}/lowmem-dbus.c
+    ${MEMORY_SOURCE_DIR}/lowmem-process.c
+    ${MEMORY_SOURCE_DIR}/vmpressure-lowmem-handler.c
+    )
+ELSEIF("${MEMORY_MODULE}" STREQUAL "OFF")
+  SET(SOURCES ${SOURCES}
+    ${MEMORY_SOURCE_DIR}/stub-memory.c
+    )
+ENDIF()
+
+SET (REQUIRES_LIST ${REQUIRES_LIST}
+	ecore
+	dlog
+	glib-2.0
+    sqlite3
+	vconf
+	vconf-internal-keys
+	x11
+	ecore-x
+	ecore-input
+	ecore-file
+	evas
+	edbus)
+
+INCLUDE(FindPkgConfig)
+pkg_check_modules(daemon_pkgs REQUIRED ${REQUIRES_LIST})
+
+FOREACH(flag ${daemon_pkgs_CFLAGS})
+        SET(EXTRA_CFLAGS "${EXTRA_CFLAGS} ${flag} -pthread")
+ENDFOREACH(flag)
+
+SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${EXTRA_CFLAGS}")
+
+ADD_EXECUTABLE (${PROJECT_NAME} ${HEADERS} ${SOURCES})
+TARGET_LINK_LIBRARIES(${PROJECT_NAME}
+  ${daemon_pkgs_LDFLAGS})
+
+SET_TARGET_PROPERTIES(${PROJECT_NAME} PROPERTIES SKIP_BUILD_RPATH true)
+INSTALL(FILES ${PROJECT_NAME}
+  DESTINATION ${CMAKE_INSTALL_PREFIX}/bin RENAME resourced
+  PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE WORLD_EXECUTE)
+
+IF("${MEMORY_ENG}" STREQUAL "ON")
+  INSTALL(FILES ${MEMORY_SOURCE_DIR}/memory_eng.conf
+    DESTINATION /etc/resourced RENAME memory.conf)
+ELSE()
+  INSTALL(FILES ${MEMORY_SOURCE_DIR}/memory_user.conf
+    DESTINATION /etc/resourced RENAME memory.conf)
+ENDIF()
+
+INSTALL(FILES ${MEMORY_SOURCE_DIR}/memory.conf DESTINATION /etc/resourced)
+
+INSTALL(FILES ${INCLUDE_PUBLIC_DIR}/resourced.h DESTINATION ${CMAKE_INSTALL_PREFIX}/include/system)
+

@@ -1,0 +1,11 @@
+libdir=@LIBDIR@
+includedir=@INCLUDEDIR@
+
+Name: @PC_NAME@
+Description: @PACKAGE_DESCRIPTION@
+Version: @VERSION@
+Requires: @PC_REQUIRED@
+#Libs: -L${libdir} @PC_PROVIDED_LIBS@
+Libs: -L${libdir} -lproc-stat
+Cflags: @PC_CFLAGS@
+

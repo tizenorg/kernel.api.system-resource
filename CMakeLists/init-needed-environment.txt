@@ -1,0 +1,79 @@
+SET(fw_name "resourced")
+SET(RESOURCED resourced)
+
+SET(LIBS libs)
+SET(PROC-STAT proc-stat)
+SET(POWERTOP-WRAPPER powertop-wrapper)
+PROJECT(${fw_name})
+
+#Set modules, all modules are enabled by default
+IF(NOT DEFINED MEMORY_MODULE)
+  SET(MEMORY_MODULE "ON")
+ENDIF()
+IF(NOT DEFINED POWERTOP_MODULE)
+  SET(POWERTOP_MODULE "OFF")
+ENDIF()
+
+#Set visibility
+SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Werror -fvisibility=hidden")
+SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror -fvisibility=hidden")
+
+#Set as-needed
+SET(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--as-needed")
+SET(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--as-needed")
+
+#Set debug-mode if needed
+IF("${CMAKE_BUILD_TYPE}" STREQUAL  "DEBUG")
+  STRING(REGEX REPLACE "-O2" "" CMAKE_C_FLAGS ${CMAKE_C_FLAGS})
+  SET(DEBUG_ENABLED 1)
+  SET(EXTRA_CFLAGS "${EXTRA_CFLAGS} -Wall -O0 -g -pg")
+  SET(CMAKE_VERBOSE_MAKEFILE ON)
+  SET(VERBOSE 1)
+ELSE()
+#set compile size optimization option in case of none DEBUG
+  SET(ADDITIONAL_OFLAGS "-fdata-sections -ffunction-sections -Wl,--gc-sections -fno-exceptions")
+  SET(EXTRA_CFLAGS "${EXTRA_CFLAGS} ${ADDITIONAL_OFLAGS}")
+SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${ADDITIONAL_OFLAGS}")
+ENDIF()
+
+SET(PREFIX ${CMAKE_INSTALL_PREFIX})
+
+#following section is needed for pkg-config *.in file
+SET(LIBDIR ${PREFIX}/lib)
+SET(INCLUDEDIR ${PREFIX}/include)
+SET(PC_NAME ${fw_name})
+SET(PC_REQUIRED "glib-2.0
+		 vconf
+		 vconf-internal-keys
+		 sqlite3
+		 dlog
+		 edbus")
+
+SET(PC_PROVIDED_LIBS "-l${PROC-STAT} -l${RESOURCED}")
+
+SET(PC_CFLAGS -I\${includedir}/system)
+SET(VERSION ${FULLVER})
+
+CONFIGURE_FILE(
+    system-resource.pc.in
+    ${CMAKE_SOURCE_DIR}/system-resource.pc
+    @ONLY
+)
+
+#init variables with sources
+SET(DATA_DIR                    ${CMAKE_SOURCE_DIR}/data)
+SET(CMAKELISTS_DIR              ${CMAKE_SOURCE_DIR}/CMakeLists)
+SET(INCLUDE_COMMON_DIR          ${CMAKE_SOURCE_DIR}/src/common)
+SET(INCLUDE_PUBLIC_DIR          ${CMAKE_SOURCE_DIR}/include)
+SET(RESOURCED_INCLUDEDIR        ${INCLUDE_COMMON_DIR} ${INCLUDE_PUBLIC_DIR})
+
+SET(SOURCE_DIR                  ${CMAKE_SOURCE_DIR}/src)
+SET(RESOURCED_SOURCE_DIR        ${SOURCE_DIR}/resourced)
+SET(PROC-STAT_SOURCE_DIR        ${SOURCE_DIR}/proc-stat)
+SET(MEMORY_SOURCE_DIR           ${SOURCE_DIR}/memory)
+SET(MODULES_SOURCE_DIR		${SOURCE_DIR}/modules)
+SET(CGROUP_SOURCE_DIR           ${SOURCE_DIR}/cgroup)
+SET(COMMON_SOURCE_DIR           ${SOURCE_DIR}/common)
+IF("${POWERTOP_MODULE}" STREQUAL "ON")
+SET(POWERTOP-WRAPPER_SOURCE_DIR           ${SOURCE_DIR}/powertop-wrapper)
+ENDIF()
