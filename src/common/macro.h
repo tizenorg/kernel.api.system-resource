@@ -1,5 +1,31 @@
-#ifndef _PERF_CONTROL_MACRO_H
-#define _PERF_CONTROL_MACRO_H
+/*
+ * resourced
+ *
+ * Copyright (c) 2014 Samsung Electronics Co., Ltd. All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ */
+
+/*
+ *  @file: macro.h
+ *
+ *  @desc general macros
+ */
+
+
+#ifndef _RESOURCED_MACRO_H_
+#define _RESOURCED_MACRO_H_
 
 #define execute_once \
 	static int __func__##guardian;                                   \
@@ -10,6 +36,8 @@
 #include <assert.h>
 #include <stdio.h>
 #include <config.h>
+
+#define API __attribute__((visibility("default")))
 
 #define ARRAY_SIZE(x) (sizeof(x)/sizeof(x[0]))
 
@@ -39,6 +67,13 @@ static void fn_name(void *data, void __attribute__((__unused__)) *not_used) \
 	sizeof(type) <= 4 ? 10 : \
 	sizeof(type) <= 8 ? 20 : \
 	sizeof(int[-2*(sizeof(type) > 8)])))
+
+#define ret_msg_if(expr, fmt, arg...) do { \
+        if (expr) { \
+		_E(fmt, ##arg);			\
+                return; \
+        } \
+} while (0)
 
 #define ret_value_if(expr, val) do { \
         if (expr) { \
@@ -102,6 +137,14 @@ static void fn_name(void *data, void __attribute__((__unused__)) *not_used) \
 #define gslist_for_each_item(item, list)                       \
 	for(item = list; item != NULL; item = g_slist_next(item))
 
+#define gslist_for_each(head, elem, node)	\
+	for (elem = head, node = NULL; elem && ((node = elem->data) != NULL); elem = elem->next, node = NULL)
+
+#define gslist_for_each_safe(head, elem, elem_next, node) \
+	for (elem = head, elem_next = g_list_next(elem), node = NULL; \
+			elem && ((node = elem->data) != NULL); \
+			elem = elem_next, elem_next = g_list_next(elem), node = NULL)
+
 #define DB_ACTION(command) do {				\
 	if ((command) != SQLITE_OK) {			\
 		error_code = RESOURCED_ERROR_DB_FAILED;	\
@@ -119,4 +162,4 @@ static void fn_name(void *data, void __attribute__((__unused__)) *not_used) \
 		remove_module(module);					\
 	}
 
-#endif	/* _PERF_CONTROL_MACRO_H */
+#endif	/* _RESOURCED_MACRO_H_ */

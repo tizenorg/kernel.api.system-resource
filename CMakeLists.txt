@@ -1,8 +1,118 @@
 CMAKE_MINIMUM_REQUIRED(VERSION 2.6)
 
-INCLUDE(${CMAKE_SOURCE_DIR}/CMakeLists/init-needed-environment.txt)
+SET(fw_name "system-resource")
+SET(RESOURCED resourced)
+SET(LIBS libs)
+SET(PROC-STAT proc-stat)
+SET(NETWORK rd-network)
 
-INSTALL(FILES ${CMAKE_SOURCE_DIR}/system-resource.pc DESTINATION lib/pkgconfig)
+IF("${POWERTOP_MODULE}" STREQUAL "ON")
+SET(POWERTOP-WRAPPER powertop-wrapper)
+ENDIF()
+
+PROJECT(${fw_name})
+
+#Set visibility
+SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Werror -fvisibility=hidden")
+SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Werror -fvisibility=hidden")
+
+#Set as-needed
+SET(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--as-needed")
+SET(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--as-needed")
+
+#Set debug-mode if needed
+IF("${CMAKE_BUILD_TYPE}" STREQUAL  "DEBUG")
+  STRING(REGEX REPLACE "-O2" "" CMAKE_C_FLAGS ${CMAKE_C_FLAGS})
+  SET(DEBUG_ENABLED 1)
+  SET(EXTRA_CFLAGS "${EXTRA_CFLAGS} -Wall -O0 -g -pg")
+  SET(CMAKE_VERBOSE_MAKEFILE ON)
+  SET(VERBOSE 1)
+ELSE()
+#set compile size optimization option in case of none DEBUG
+  SET(ADDITIONAL_OFLAGS "-fdata-sections -ffunction-sections -Wl,--gc-sections -fno-exceptions")
+  SET(EXTRA_CFLAGS "${EXTRA_CFLAGS} ${ADDITIONAL_OFLAGS}")
+SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${ADDITIONAL_OFLAGS}")
+ENDIF()
+
+SET(PREFIX ${CMAKE_INSTALL_PREFIX})
+
+#following section is needed for pkg-config *.in file
+SET(LIBDIR ${PREFIX}/lib)
+SET(INCLUDEDIR ${PREFIX}/include)
+SET(PC_NAME lib${RESOURCED})
+SET(PC_NAME_DEPRECATED ${fw_name})
+SET(PC_REQUIRED "glib-2.0
+		 vconf
+		 vconf-internal-keys
+		 sqlite3
+		 dlog
+		 eina
+		 edbus")
+
+SET(PC_PROVIDED_LIBS "-l${PROC-STAT}")
+
+IF("${NETWORK_MODULE}" STREQUAL "ON")
+	SET(PC_PROVIDED_LIBS "${PC_PROVIDED_LIBS} -l${NETWORK} -l${RESOURCED}")
+ENDIF()
+
+IF("${POWERTOP_MODULE}" STREQUAL "ON")
+  SET(PC_PROVIDED_LIBS "${PC_PROVIDED_LIBS} -l${POWERTOP-WRAPPER}" )
+ENDIF()
+
+SET(PC_CFLAGS -I\${includedir}/system)
+SET(VERSION ${FULLVER})
+
+CONFIGURE_FILE(
+    lib${RESOURCED}.pc.in
+    ${CMAKE_SOURCE_DIR}/lib${RESOURCED}.pc
+    @ONLY
+)
+
+CONFIGURE_FILE(
+    ${fw_name}.pc.in
+    ${CMAKE_SOURCE_DIR}/${fw_name}.pc
+    @ONLY
+)
+
+#init variables with sources
+SET(DATA_DIR                    ${CMAKE_SOURCE_DIR}/data)
+SET(CMAKELISTS_DIR              ${CMAKE_SOURCE_DIR}/CMakeLists)
+SET(INCLUDE_COMMON_DIR          ${CMAKE_SOURCE_DIR}/src/common)
+SET(INCLUDE_PUBLIC_DIR          ${CMAKE_SOURCE_DIR}/include)
+SET(RESOURCED_INCLUDEDIR        ${INCLUDE_COMMON_DIR} ${INCLUDE_PUBLIC_DIR})
+
+SET(SOURCE_DIR                  ${CMAKE_SOURCE_DIR}/src)
+SET(UTILS_SOURCE_DIR            ${SOURCE_DIR}/utils)
+SET(RESOURCED_SOURCE_DIR        ${SOURCE_DIR}/resourced)
+SET(PROC-STAT_SOURCE_DIR        ${SOURCE_DIR}/proc-stat)
+IF("${POWERTOP_MODULE}" STREQUAL "ON")
+SET(POWERTOP-WRAPPER_SOURCE_DIR ${SOURCE_DIR}/powertop-wrapper)
+ENDIF()
+SET(MEMORY_SOURCE_DIR           ${SOURCE_DIR}/memory)
+SET(MEMPS_SOURCE_DIR            ${SOURCE_DIR}/memps)
+SET(SWAP_SOURCE_DIR             ${SOURCE_DIR}/swap)
+SET(MODULES_SOURCE_DIR          ${SOURCE_DIR}/modules)
+SET(LOGGING_SOURCE_DIR		${SOURCE_DIR}/logging)
+SET(NETWORK_SOURCE_DIR          ${SOURCE_DIR}/network)
+SET(COMMON_SOURCE_DIR           ${SOURCE_DIR}/common)
+SET(CPU_SOURCE_DIR              ${SOURCE_DIR}/cpu)
+SET(VIP_SOURCE_DIR              ${SOURCE_DIR}/vip-agent)
+SET(TIMER_SOURCE_DIR              ${SOURCE_DIR}/timer-slack)
+
+INSTALL(FILES ${CMAKE_SOURCE_DIR}/lib${RESOURCED}.pc DESTINATION lib/pkgconfig)
+INSTALL(FILES ${CMAKE_SOURCE_DIR}/${fw_name}.pc DESTINATION lib/pkgconfig)
 INSTALL(FILES ${CMAKE_SOURCE_DIR}/resourced.conf DESTINATION /etc/dbus-1/system.d)
 
-INCLUDE(${CMAKE_SOURCE_DIR}/CMakeLists/init-cmake-projects.txt)
+FILE(MAKE_DIRECTORY ${RESOURCED}-cmake)
+CONFIGURE_FILE(${CMAKELISTS_DIR}/${RESOURCED}.txt ${RESOURCED}-cmake/CMakeLists.txt COPYONLY)
+
+
+ADD_SUBDIRECTORY(${PROC-STAT_SOURCE_DIR})
+ADD_SUBDIRECTORY(${CMAKE_SOURCE_DIR}/${RESOURCED}-cmake)
+IF("${POWERTOP_MODULE}" STREQUAL "ON")
+ADD_SUBDIRECTORY(${POWERTOP-WRAPPER_SOURCE_DIR})
+ENDIF()
+ADD_SUBDIRECTORY(${MEMPS_SOURCE_DIR})
+IF("${NETWORK_MODULE}" STREQUAL "ON")
+ADD_SUBDIRECTORY(${NETWORK_SOURCE_DIR})
+ENDIF()

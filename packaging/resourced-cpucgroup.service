@@ -1,0 +1,10 @@
+[Unit]
+Description=make cpucgroup
+After=graphical.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/resourced-cpucgroup.sh
+
+[Install]
+WantedBy=graphical.target

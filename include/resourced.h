@@ -26,38 +26,25 @@
  *  Created on: May 30, 2012
  */
 
-#ifndef _RESOURCED_H_
-#define _RESOURCED_H_
+#ifndef _SYSTEM_RESOURCE_RESOURCED_H_
+#define _SYSTEM_RESOURCE_RESOURCED_H_
 
 #include <sys/types.h>
-#include <signal.h>
-
-#define RESOURCED_ALL_APP "RESOURCED_ALL_APPLICATION_IDENTIFIER"
-#define TETHERING_APP_NAME "RESOURCED_TETHERING_APPLICATION_IDENTIFIER"
 
 #ifdef __cplusplus
 extern "C" {
 #endif /* __cplusplus */
 
-struct daemon_opts {
-	sig_atomic_t start_daemon;
-};
+#define RESOURCED_ALL_APP "RESOURCED_ALL_APPLICATION_IDENTIFIER"
+#define TETHERING_APP_NAME "RESOURCED_TETHERING_APPLICATION_IDENTIFIER"
 
-/**
- * @brief State of the monitored process
- */
-typedef enum {
-	RESOURCED_STATE_UNKNOWN = 0,
-	RESOURCED_STATE_FOREGROUND = 1 << 1,		/** < foreground state */
-	RESOURCED_STATE_BACKGROUND = 1 << 2,		/** < background state */
-	RESOURCED_STATE_LAST_ELEM = 1 << 3
-} resourced_state_t;
 
 /**
  * @brief return code of the rsml's function
  */
 typedef enum {
-	RESOURCED_ERROR_NONMONITOR = -8,		/** < Process don't show watchdog popup */
+	RESOURCED_ERROR_NONMONITOR = -9,		/** < Process don't show watchdog popup */
+	RESOURCED_ERROR_NONFREEZABLE = -8,		/** < Process is nonfrizable */
 	RESOURCED_ERROR_NOTIMPL = -7,		 /**< Not implemented yet error */
 	RESOURCED_ERROR_UNINITIALIZED = -6,	 /**< Cgroup doen't
 					   mounted or daemon not started */
@@ -72,16 +59,26 @@ typedef enum {
 #define RESOURCED_ERROR_OK RESOURCED_ERROR_NONE
 
 /**
- * @desc Description of the boolean option for enabling/disabling some behaviar
+ * @brief return type of the counters callback
  */
 typedef enum {
-	RESOURCED_OPTION_UNDEF,
-	RESOURCED_OPTION_ENABLE,
-	RESOURCED_OPTION_DISABLE
-} resourced_option_state;
+	RESOURCED_CANCEL = 0,			/**< cancel */
+	RESOURCED_CONTINUE = 1,		/**< continue */
+} resourced_cb_ret;
+
+/**
+ * @desc After invoking this function, application will be in
+ *   the monitored scope.
+ * @details It creates an appropriate cgroup,
+ *   it generates classid for the network performance control.
+ * @param app_id[in] - application identifier, it's package name now
+ * @param pid - pid to put in to cgroup, or self pid of 0
+ * @return 0 if success or error code
+ */
+resourced_ret_c join_app_performance(const char *app_id, const pid_t pid);
 
 #ifdef __cplusplus
 }
 #endif /* __cplusplus */
 
-#endif /* _RESOURCED_H_ */
+#endif /* _SYSTEM_RESOURCE_RESOURCED_H_ */

@@ -35,6 +35,7 @@
 
 #include <Ecore.h>
 #include <mcheck.h>
+#include <systemd/sd-daemon.h>
 
 int main(int argc, char **argv)
 {
@@ -50,10 +51,13 @@ int main(int argc, char **argv)
 	ret_value_msg_if(ret_code < 0, ret_code,
 			 "Resourced initialization failed\n");
 	init_modules_arg(&marg, &darg);
+	modules_check_runtime_support(&marg);
 	modules_init(&marg);
 	ret_code = resourced_proc_init(darg.opts);
 	if (ret_code < 0)
 		_E("Proc init failed");
+	sd_notify(0, "READY=1");
+
 	ecore_main_loop_begin();
 	modules_exit(&marg);
 	resourced_deinit(&darg);

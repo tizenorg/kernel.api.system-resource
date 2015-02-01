@@ -45,4 +45,6 @@ resourced_ret_c fwrite_array(const char *path, const void *array,
 			     const size_t size_of_elem,
 			     const size_t numb_of_elem);
 
+char *cread(const char *path);
+char *cgets(char **contents);
 #endif  /*_RESOURCED_FILE_HELPER_H_*/

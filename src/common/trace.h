@@ -26,7 +26,7 @@
 #ifndef _SYSTEM_RESOURCE_TRACE_H_
 #define _SYSTEM_RESOURCE_TRACE_H_
 
-#include <config.h>
+#include "config.h"
 #include <dlog.h>
 #include <errno.h>
 #include <signal.h>

@@ -124,7 +124,7 @@ static inline char *recv_str(int fd)
  * of string type
  * @return 0 on success errno constants in error case
 */
-static int read_message(int fd, struct resman_noti *msg)
+static int read_message(int fd, struct resourced_noti *msg)
 {
 	int i;
 
@@ -153,7 +153,7 @@ static inline void internal_free(char *str)
 		free(str);
 }
 
-static inline void free_message(struct resman_noti *msg)
+static inline void free_message(struct resourced_noti *msg)
 {
 	int i;
 
@@ -164,7 +164,7 @@ static inline void free_message(struct resman_noti *msg)
 	free(msg);
 }
 
-static int process_message(struct resman_noti *msg)
+static int process_message(struct resourced_noti *msg)
 {
 	_D("process message caller pid %d\n", msg->pid);
 	return resourced_proc_action(msg->type, msg->argc, msg->argv);
@@ -187,7 +187,7 @@ static void safe_write_int(int fd, int type, int *value)
 static Eina_Bool proc_noti_cb(void *data, Ecore_Fd_Handler *fd_handler)
 {
 	int fd;
-	struct resman_noti *msg;
+	struct resourced_noti *msg;
 	int ret = -1;
 	struct sockaddr_un client_address;
 	int client_sockfd;
@@ -201,7 +201,7 @@ static Eina_Bool proc_noti_cb(void *data, Ecore_Fd_Handler *fd_handler)
 
 	fd = ecore_main_fd_handler_fd_get(fd_handler);
 
-	msg = malloc(sizeof(struct resman_noti));
+	msg = malloc(sizeof(struct resourced_noti));
 	if (msg == NULL) {
 		_E("proc_noti_cb : Not enough memory");
 		return ECORE_CALLBACK_RENEW;
@@ -252,8 +252,8 @@ static int proc_noti_socket_init(void)
 	int fd;
 	struct sockaddr_un serveraddr;
 
-	if (access(RESMAN_SOCKET_PATH, F_OK) == 0)
-		unlink(RESMAN_SOCKET_PATH);
+	if (access(RESOURCED_SOCKET_PATH, F_OK) == 0)
+		unlink(RESOURCED_SOCKET_PATH);
 
 	fd = socket(AF_UNIX, SOCK_STREAM, 0);
 	if (fd < 0) {
@@ -279,7 +279,7 @@ static int proc_noti_socket_init(void)
 
 	bzero(&serveraddr, sizeof(struct sockaddr_un));
 	serveraddr.sun_family = AF_UNIX;
-	strncpy(serveraddr.sun_path, RESMAN_SOCKET_PATH,
+	strncpy(serveraddr.sun_path, RESOURCED_SOCKET_PATH,
 		sizeof(serveraddr.sun_path));
 
 	if (bind(fd, (struct sockaddr *)&serveraddr, sizeof(struct sockaddr)) <
@@ -289,7 +289,7 @@ static int proc_noti_socket_init(void)
 		return -1;
 	}
 
-	if (chmod(RESMAN_SOCKET_PATH, (S_IRWXU | S_IRWXG | S_IRWXO)) < 0)
+	if (chmod(RESOURCED_SOCKET_PATH, (S_IRWXU | S_IRWXG | S_IRWXO)) < 0)
 		_E("failed to change the socket permission");
 
 	if (listen(fd, 5) < 0) {

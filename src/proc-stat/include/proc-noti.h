@@ -25,11 +25,11 @@
 #ifndef __PROC_NOTI_H__
 #define __PROC_NOTI_H__
 
-#define RESMAN_SOCKET_PATH "/tmp/resman"
+#define RESOURCED_SOCKET_PATH "/tmp/resourced"
 #define NOTI_MAXARG	16
-#define NOTI_MAXARGLEN 512
+#define NOTI_MAXARGLEN 256
 
-struct resman_noti { /** cgroup notification type **/
+struct resourced_noti { /** cgroup notification type **/
 	int pid;
 	int type;
 	char *path;

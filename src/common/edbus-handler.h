@@ -48,11 +48,41 @@ struct edbus_object {
 #define OBJECT_PATH		"/Org/Tizen/ResourceD"
 #define INTERFACE_NAME		BUS_NAME
 
-#define RESOURCED_PATH_OOM				OBJECT_PATH"/Oom"
+/*
+ * The EDbus method to update the resourced counters
+ * Signal is generated after the database update
+ * and store new values of the counters
+ */
+#define RESOURCED_NETWORK_UPDATE		"Update"
+#define RESOURCED_NETWORK_UPDATE_FINISH	"UpdateFinish"
+#define RESOURCED_NETWORK_PROCESS_RESTRICTION	"ProcessRestriction"
+#define RESOURCED_NETWORK_CREATE_QUOTA		"CreateQuota"
+#define RESOURCED_NETWORK_REMOVE_QUOTA		"RemoveQuota"
+#define RESOURCED_NETWORK_JOIN_NET_STAT		"JoinNetStat"
+#define RESOURCED_NETWORK_GET_STATS		"GetStats"
+
+/*
+ * Core service
+ *   get/set swap status
+ *   operations about swap
+ */
+#define RESOURCED_PATH_SWAP		OBJECT_PATH"/Swap"
+#define RESOURCED_INTERFACE_SWAP	INTERFACE_NAME".swap"
+
+#define RESOURCED_PATH_OOM		OBJECT_PATH"/Oom"
 #define RESOURCED_INTERFACE_OOM		INTERFACE_NAME".oom"
 
-#define RESOURCED_PATH_PROCESS			OBJECT_PATH"/Process"
-#define RESOURCED_INTERFACE_PROCESS		INTERFACE_NAME".process"
+#define RESOURCED_PATH_NETWORK		OBJECT_PATH"/Network"
+#define RESOURCED_INTERFACE_NETWORK	INTERFACE_NAME".network"
+
+#define RESOURCED_PATH_PROCESS		OBJECT_PATH"/Process"
+#define RESOURCED_INTERFACE_PROCESS	INTERFACE_NAME".process"
+
+/*
+ * Logging
+ */
+#define RESOURCED_PATH_LOGGING		OBJECT_PATH"/Logging"
+#define RESOURCED_INTERFACE_LOGGING	INTERFACE_NAME".logging"
 
 /*
  * System popup
@@ -71,6 +101,12 @@ struct edbus_object {
 #define DEVICED_PATH_PROCESS		"/Org/Tizen/System/DeviceD/Process"
 #define DEVICED_INTERFACE_PROCESS	DEVICED_BUS_NAME".Process"
 
+#define DEVICED_PATH_DISPLAY               "/Org/Tizen/System/DeviceD/Display"
+#define DEVICED_INTERFACE_DISPLAY	DEVICED_BUS_NAME".display"
+
+#define SIGNAL_LCD_ON	"LCDOn"
+#define SIGNAL_LCD_OFF	"LCDOff"
+
 struct dbus_byte {
 	char *data;
 	int size;
@@ -78,7 +114,18 @@ struct dbus_byte {
 
 #define RETRY_MAX 5
 
+/*
+ * @desc helper function for filling params array
+ * That params array is used in dbus_method_sync/dbus_method_async
+ * */
+void serialize_params(char *params[], size_t n, ...);
+
+
 DBusMessage *dbus_method_sync(const char *dest, const char *path,
+		const char *interface, const char *method,
+		const char *sig, char *param[]);
+
+int dbus_method_async(const char *dest, const char *path,
 		const char *interface, const char *method,
 		const char *sig, char *param[]);
 

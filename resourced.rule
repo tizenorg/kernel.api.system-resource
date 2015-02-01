@@ -1,0 +1,3 @@
+resourced com.samsung.setting::private r
+resourced system::vconf_inhouse rw
+resourced system-apps r

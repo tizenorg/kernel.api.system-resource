@@ -1,7 +1,7 @@
 /*
  * resourced
  *
- * Copyright (c) 2013 Samsung Electronics Co., Ltd. All rights reserved.
+ * Copyright (c) 2014 Samsung Electronics Co., Ltd. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -31,18 +31,18 @@
 
 static GSList *modules_list;
 
-void add_module(struct module_ops *module)
+void add_module(const struct module_ops *module)
 {
-	ret_value_msg_if(!module, , "Invalid module handler\n");
+	ret_msg_if(!module, "Invalid module handler\n");
 	if (module->priority == MODULE_PRIORITY_HIGH)
-		modules_list = g_slist_prepend(modules_list, module);
+		modules_list = g_slist_prepend(modules_list, (gpointer)module);
 	else
-		modules_list = g_slist_append(modules_list, module);
+		modules_list = g_slist_append(modules_list, (gpointer)module);
 }
 
-void remove_module(struct module_ops *module)
+void remove_module(const struct module_ops *module)
 {
-	modules_list = g_slist_remove(modules_list, module);
+	modules_list = g_slist_remove(modules_list, (gpointer)module);
 }
 
 const struct module_ops *find_module(const char *name)
@@ -58,10 +58,32 @@ const struct module_ops *find_module(const char *name)
 	return NULL;
 }
 
+void modules_check_runtime_support(void *data)
+{
+	GSList *iter;
+	const struct module_ops *module;
+	int ret_code = RESOURCED_ERROR_NONE;
+
+	gslist_for_each_item(iter, modules_list) {
+		module = (const struct module_ops *)iter->data;
+		_D("check runtime support [%s] module\n", module->name);
+
+		if (!module->check_runtime_support)
+			continue;
+
+		ret_code = module->check_runtime_support((void *)module);
+		if (ret_code != RESOURCED_ERROR_NONE) {
+			_E("%s module check failed", module->name);
+			remove_module(module);
+			continue;
+		}
+	}
+}
+
 void modules_init(void *data)
 {
 	GSList *iter;
-	struct module_ops *module;
+	const struct module_ops *module;
 	int ret_code = RESOURCED_ERROR_NONE;
 
 	gslist_for_each_item(iter, modules_list) {
@@ -79,7 +101,7 @@ void modules_exit(void *data)
 	GSList *iter;
 	/* Deinitialize in reverse order */
 	GSList *reverse_list = g_slist_reverse(modules_list);
-	struct module_ops *module;
+	const struct module_ops *module;
 	int ret_code = RESOURCED_ERROR_NONE;
 
 	gslist_for_each_item(iter, reverse_list) {

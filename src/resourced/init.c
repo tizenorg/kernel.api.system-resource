@@ -1,7 +1,7 @@
 /*
  * resourced
  *
- * Copyright (c) 2000 - 2013 Samsung Electronics Co., Ltd. All rights reserved.
+ * Copyright (c) 2014 Samsung Electronics Co., Ltd. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,27 +20,38 @@
 /**
  * @file init.c
  * @desc Resourced initialization
- * Copyright (c) 2013 Samsung Electronics Co., Ltd. All rights reserved.
  *
  **/
 
 #include "const.h"
+#include "counter.h"
 #include "edbus-handler.h"
-
+#include "cgroup.h"
 #include "init.h"
 #include "macro.h"
 #include "module-data.h"
 #include "proc-main.h"
 #include "proc-monitor.h"
+#include "swap-common.h"
 #include "trace.h"
 #include "version.h"
-#include "resourced.h"
 
 #include <Ecore.h>
 #include <getopt.h>
 #include <signal.h>
 
-static struct daemon_opts opts = {1};
+static struct daemon_opts opts = { 1,
+				   1,
+				   1,
+				   COUNTER_UPDATE_PERIOD,
+				   FLUSH_PERIOD,
+				   RESOURCED_DEFAULT_STATE,
+				   0};
+
+#define SWAP_MAX_ARG_SIZE 16
+
+static char swap_arg[SWAP_ARG_END][SWAP_MAX_ARG_SIZE] = { "swapoff",
+				    "swapon",};
 
 static void print_root_usage()
 {
@@ -49,12 +60,21 @@ static void print_root_usage()
 
 static void print_usage()
 {
-	puts("resmand [Options]");
+	puts("resourced [Options]");
 	puts("       Application options:");
+	printf
+	    ("-u [--update-period] - time interval for updating,"
+	     " %d by default\n", opts.update_period);
+	printf
+	    ("-f [--flush-period] - time interval for storing data at database,"
+	     "%d by default\n", opts.flush_period);
 	printf("-s [--start-daemon] - start as daemon, %d by default\n",
 	       opts.start_daemon);
 	puts("-v [--version] - program version");
 	puts("-h [--help] - application help");
+	printf("-c string [--swapcontrol=string] - control swap policy and "
+	       "select sting %s, %s by default\n",
+	       swap_arg[SWAP_OFF], swap_arg[SWAP_ON]);
 }
 
 static void print_version()
@@ -65,15 +85,18 @@ static void print_version()
 
 static int parse_cmd(int argc, char **argv)
 {
-	const char *optstring = ":hv:s:w";
+	const char *optstring = ":hvu:s:f:cw";
 	const struct option options[] = {
 		{"help", no_argument, 0, 'h'},
 		{"version", no_argument, 0, 'v'},
+		{"update-period", required_argument, 0, 'u'},
+		{"flush-period", required_argument, 0, 'f'},
 		{"start-daemon", required_argument, 0, 's'},
+		{"swapcontrol", required_argument, 0, 'c'},
 		{"enable-watchodg", no_argument, 0, 'w'},
 		{0, 0, 0, 0}
 	};
-	int longindex, retval;
+	int longindex, retval, i;
 
 	while ((retval =
 		getopt_long(argc, argv, optstring, options, &longindex)) != -1)
@@ -85,8 +108,26 @@ static int parse_cmd(int argc, char **argv)
 		case 'v':
 			print_version();
 			return RESOURCED_ERROR_FAIL;
+		case 'u':
+			opts.update_period = atoi(optarg);
+			break;
+		case 'f':
+			opts.flush_period = atoi(optarg);
+			break;
 		case 's':
 			opts.start_daemon = atoi(optarg);
+			break;
+		case 'c':
+			for (i = 0; i < SWAP_ARG_END; i++)
+				if (optarg && !strncmp(optarg, swap_arg[i],
+						       SWAP_MAX_ARG_SIZE)) {
+					opts.enable_swap = i;
+					_D("argment swaptype = %s",
+					   swap_arg[i]);
+					break;
+				}
+			break;
+		case 'o':
 			break;
 		case 'w':
 			proc_set_watchdog_state(PROC_WATCHDOG_ENABLE);
@@ -110,6 +151,20 @@ static int assert_root(void)
 
 static void sig_term_handler(int sig)
 {
+	struct shared_modules_data *shared_data = get_shared_modules_data();
+
+	opts.state |= RESOURCED_FORCIBLY_QUIT_STATE;
+	_SD("sigterm or sigint received");
+	if (shared_data && shared_data->carg && shared_data->carg->ecore_timer) {
+		/* save data on exit, it's impossible to do in fini
+		 * module function, due it executes right after ecore stopped */
+		reschedule_count_timer(shared_data->carg, 0);
+
+		/* Another way it's introduce another timer and quit main loop
+		 * in it with waiting some event. */
+		sleep(TIME_TO_SAFE_DATA);
+	}
+
 	ecore_main_loop_quit();
 }
 
@@ -132,6 +187,7 @@ int resourced_init(struct daemon_arg *darg)
 	ret_code = parse_cmd(darg->argc, darg->argv);
 	ret_value_msg_if(ret_code < 0, RESOURCED_ERROR_FAIL,
 			 "Error parse cmd arguments\n");
+	_D("argment swaptype = %s", swap_arg[opts.enable_swap]);
 	add_signal_handler();
 	edbus_init();
 	return RESOURCED_ERROR_NONE;
@@ -144,4 +200,18 @@ int resourced_deinit(struct daemon_arg *darg)
 	ret_value_msg_if(darg == NULL, RESOURCED_ERROR_INVALID_PARAMETER,
 			 "Invalid daemon argument\n");
 	return RESOURCED_ERROR_NONE;
+}
+
+void set_daemon_net_block_state(const enum traffic_restriction_type rst_type,
+	const struct counter_arg *carg)
+{
+	ret_msg_if(carg == NULL,
+		"Please provide valid counter arg!");
+
+	if (rst_type == RST_SET)
+		opts.state |= RESOURCED_NET_BLOCKED_STATE; /* set bit */
+	else {
+		opts.state &=(~RESOURCED_NET_BLOCKED_STATE); /* nulify bit */
+		ecore_timer_thaw(carg->ecore_timer);
+	}
 }

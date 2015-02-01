@@ -35,13 +35,15 @@ struct module_ops {
 	const char *name;
 	int (*init) (void *data);
 	int (*exit) (void *data);
+	int (*check_runtime_support) (void *data);
 	int (*control) (void *data);
 	int (*status) (void *data);
 };
 
-void add_module(struct module_ops *module);
-void remove_module(struct module_ops *module);
+void add_module(const struct module_ops *module);
+void remove_module(const struct module_ops *module);
 
+void modules_check_runtime_support(void *data);
 void modules_init(void *data);
 void modules_exit(void *data);
 

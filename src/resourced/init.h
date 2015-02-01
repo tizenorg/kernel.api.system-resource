@@ -29,6 +29,9 @@
 
 #include "resourced.h"
 
+#include "daemon-options.h"
+#include "transmission.h"
+
 struct daemon_arg {
 	int argc;
 	char **argv;
@@ -38,5 +41,10 @@ struct daemon_arg {
 int resourced_init(struct daemon_arg *darg);
 
 int resourced_deinit(struct daemon_arg *darg);
+
+struct counter_arg;
+
+void set_daemon_net_block_state(const enum traffic_restriction_type rst_type,
+	const struct counter_arg* carg);
 
 #endif /* _RESOURCED_INIT_H */

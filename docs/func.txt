@@ -1,0 +1,427 @@
+Following is the list of functions that are currently exported in libresourced.so
+
+Types:
+======
+
+/**
+ * @brief Datausage quota
+ */
+typedef struct {
+	int time_period;
+	int64_t snd_quota;
+	int64_t rcv_quota;
+	resman_state_t quota_type;
+} resman_datausage_quota;
+
+/**
+ * @brief return type of the counters callback
+ */
+typedef enum {
+	PCL_CANCEL = 0,			/**< cancel */
+	PCL_CONTINUE = 1,		/**< continue */
+} resman_cb_ret;
+
+/**
+ * @brief callback for enumerate counters and restrictions
+ */
+typedef resman_cb_ret(*resman_perf_info_cb) (const resman_perf_info * info,
+				       void *user_data);
+
+/**
+ * @brief Selection rule applied for data usage enumeration
+ */
+typedef struct {
+	time_t from;
+	time_t to;
+	char *iface;
+	int granularity;
+} data_usage_selection_rule;
+
+typedef struct {
+	resman_sql_exec exec;
+} resman_base_query;
+
+typedef resman_ret_c(*resman_sql_exec) (const resman_exec_context *context);
+
+typedef struct {
+	resman_perf_info_cb info_cb;
+	void *user_data;
+	resman_perf_selection_rule *rule;
+} resman_exec_context;
+
+typedef resman_cb_ret(*resman_perf_info_cb) (const resman_perf_info * info,
+				       void *user_data);
+/**
+ * @brief Bundle structure for bringing all together application identification
+ *     and properties.
+ * app_id - application identification - copy it if you in
+ *   callback function, don't store raw pointer on it
+ * iface - interface name, NULL means all interfaces,
+ *   don't store raw pointer on it in the callback function, copy it by value
+ * interval - time interval for given result, NULL means entire interval
+ * foreground - foreground restrictions and counters
+ * background - background restrictions and counters
+ */
+typedef struct {
+	const char *app_id;
+	const char *iface;
+	resman_tm_interval *interval;
+	resman_common_info foreground;
+	resman_common_info background;
+} resman_perf_info;
+
+/**
+ * @brief Commulative structure for holding data usage information
+ */
+typedef struct {
+	resman_counters cnt;
+	resman_restrictions rst;
+} resman_common_info;
+
+typedef struct {
+	time_t from;
+	time_t to;
+} resman_tm_interval;
+
+resman_ret_c - return value of most functions.
+
+typedef enum {
+	PCL_ERROR_NOTIMPL = -7,
+	PCL_ERROR_UNINITIALIZED = -6,
+	PCL_ERROR_NO_DATA = -5,
+	PCL_ERROR_INVALID_PARAMETER = -4,
+	PCL_ERROR_OUT_OF_MEMORY = -3,
+	PCL_ERROR_DB_FAILED = -2,
+	PCL_ERROR_FAIL = -1,
+	PCL_ERROR_OK = 0
+} resman_ret_c;
+
+/*
+ * cpu_usage: percent of cpu usage
+ * mem_usage: percent of mem usage
+ * incomming_rate_limit: rate limit for incomming packets in bytes per second
+ * outgoing_rate_limit: rate limit for outgoing packets in bytes per second
+ */
+typedef struct {
+	int cpu_usage;
+	int mem_usage;
+	int incoming_rate_limit;
+	int outgoing_rate_limit;
+} resman_restrictions;
+
+/**
+ * @brief Selection rule applied for enumeration
+ * order - order field resman_order_t
+ * filter - fiter field resman_filter
+ * groupping - on what we should groupping our result
+ */
+typedef struct {
+	unsigned char version;
+	u_int32_t order;
+	resman_filter filter;
+	u_int32_t groupping;
+} resman_perf_selection_rule;
+
+Functions:
+==========
+
+int apply_net_restriction(u_int32_t classid, int incoming_rate_limit, int outgoing_rate_limit)
+
+Applies network rate limit to application having the supplied network class ID
+
+classid - network class ID
+incoming_rate_limit - rate limit for incoming traffic
+outgoing_rate_limit - rate limit for outgoing traffic
+
+Return values:
+Non-zero values mean errors while communicating with kernel module
+
+TODO:
+- Currently incoming_rate_limit must be 0, otherwise PCL_ERROR_NOTIMPL will be returned
+
+--------------------------------------------------------------------------------
+resman_ret_c apply_restriction(const char *app_id, const resman_restrictions *foreground, const resman_restrictions *background)
+
+Stores restrictions into database to be applied when application is started again.
+
+app_id - zero-terminated string containing package name of application to be restricted
+foreground - set of restrictions applied to application while in foreground
+background - set of restrictions applied to application while in background
+
+Non-OK return values:
+PCL_ERROR_INVALID_PARAMETER - app_id is NULL
+PCL_ERROR_INVALID_PARAMETER - both foreground and background are NULL
+PCL_ERROR_FAIL - could not determine network class ID for the application
+PCL_ERROR_DB_FAILED - error while storing restrictions to database
+PCL_ERROR_NOTIMPL - incoming_rate_limit is set
+???? - apply_net_restriction can return any non-zero integer value (see above) which will be returned as is
+
+TODO:
+- Does not apply CPU and memory restrictions if application is already running
+- Background settings are ignored
+- Return meaningful result in case apply_net_restriction fails
+
+--------------------------------------------------------------------------------
+resman_ret_c bind_statement(sqlite3_stmt *stm, const resman_perf_selection_rule *rule)
+
+Applies selection rule to the statement.
+
+stm - sqlite statement to bind parameters to
+rule - ???? parameters to be bound to statement
+
+Non-OK return values:
+PCL_ERROR_INVALID_PARAMETER - stm is NULL
+PCL_ERROR_INVALID_PARAMETER - rule filter type is not PCL_FILTER_UNDEF and rule filter value is NULL
+PCL_ERROR_DB_FAILED - database error
+
+TODO:
+The function assumes that bound parameter is always the first parameter to bind. This might break on some statements.
+
+--------------------------------------------------------------------------------
+resman_base_query create_exec(const resman_perf_selection_rule *rule)
+
+Returns a query to be executed based on rule supplied
+
+--------------------------------------------------------------------------------
+int create_netlink(int protocol, int groups)
+
+Create netlink socket.
+
+Results: Created socket on success and -1 on failure.
+
+--------------------------------------------------------------------------------
+resman_ret_c data_usage_details_foreach(const char *app_id,
+				     data_usage_selection_rule *rule,
+				     resman_perf_info_cb info_cb, void *user_data)
+
+Process data usage details for application on given interval.
+
+app_id 	- null-terminated string containing package name of the application or NULL for all applications
+rule 	- parameters of query
+ - from - start of interval
+ - to - end of interval
+ - iface - name of interface or NULL for all interfaces
+ - granularity - split data usage into granularity-sized chunks
+info_cb - pointer to callback to be executed on each record
+user_data - pointer to data which will be passed as argument 3 to callback
+
+Interval is given as a pair of unix timestamps.
+If granularity is not supplied the result is the total data usage on the whole interval. Otherwise there will be one record for each chunk.
+If iface is not supplied there will be one record for each interface.
+If app_id is not supplied then records will contain total amount of data usage by all applications.
+
+info_cb must return PCL_CONTINUE to keep processing results or PCL_CANCEL to stop processing and discard the rest.
+
+Notes:
+Callbacks are issued synchronously. When data_usage_details_foreach returns, all callbacks are guaranteed to have been executed already.
+The function is not thread-safe.
+If granularity is supplied, interval is split into chunks and each record contains traffic during that chunk.
+If interface or granularity is supplied and a record contains no traffic, the record is omitted.
+
+Errors:
+PCL_ERROR_INVALID_PARAMETER 	- rule or info_cb is NULL
+PCL_ERROR_DB_FAILED		- database error
+
+--------------------------------------------------------------------------------
+void data_usage_finalize(void)
+
+Finalizes queries used in data usage functions
+
+--------------------------------------------------------------------------------
+resman_ret_c data_usage_foreach(const data_usage_selection_rule *rule,
+			     resman_perf_info_cb info_cb, void *user_data)
+
+Process data usage on given interval.
+
+rule 	- parameters of query
+ - from - start of interval
+ - to - end of interval
+ - iface - name of interface or NULL for all interfaces
+ - granularity - split data usage into granularity-sized chunks
+info_cb - pointer to callback to be executed on each record
+user_data - pointer to data which will be passed as argument 3 to callback
+
+Interval is given as a pair of unix timestamps. The result contains records for all applications that used network during that interval.
+If granularity is not supplied each record is the total data usage on the whole interval. Otherwise there is a record for each chunk.
+If iface is supplied the result is limited to that interface. Otherwise the result is a total of all interfaces.
+
+info_cb must return PCL_CONTINUE to keep processing results or PCL_CANCEL to stop processing and discard the rest.
+
+Notes:
+Callbacks are issued synchronously. When data_usage_foreach returns, all callbacks are guaranteed to have been executed already.
+The function is not thread-safe.
+If granularity is supplied, interval is split into chunks and each record contains traffic during that chunk. If any record contains no traffic, the record is omitted.
+
+Errors:
+PCL_ERROR_INVALID_PARAMETER 	- rule or info_cb is NULL
+PCL_ERROR_DB_FAILED		- database error
+
+--------------------------------------------------------------------------------
+int data_usage_init(sqlite3 *db)
+
+Initializes queries used in data usage functions.
+
+--------------------------------------------------------------------------------
+void datausage_quota_finalize(void)
+
+Finalizes queries used in data usage quota functions.
+
+--------------------------------------------------------------------------------
+int datausage_quota_init(sqlite3 *db)
+
+Initializes queries used in data usage quota functions.
+
+--------------------------------------------------------------------------------
+u_int32_t get_classid_by_pkg_name(const char *pkg_name, int create)
+
+Converts application package name to network class.
+
+pkg_name - zero-terminated string containing the package name
+create - if non-zero attempts to create the cgroup for pkg_name before fetching network class ID
+
+Returns class ID or 0 in case of error.
+
+--------------------------------------------------------------------------------
+sqlite3 *resourced_get_database(void)
+
+Returns the handler to PCL database containing restrictions and statistics.
+
+--------------------------------------------------------------------------------
+int get_family_id(int sock, pid_t pid)
+
+Probe the controller in genetlink to find the family id for the TRAF_STAT family. (Helper function)
+
+--------------------------------------------------------------------------------
+void get_in_info(int sock, const pid_t pid, const int family_id,
+	    in_traffic_event_list **list)
+
+Get list of incoming traffic records from the kernel module.
+
+--------------------------------------------------------------------------------
+void get_out_info(int sock, const pid_t pid,
+	const int family_id, out_traffic_event_list **list)
+
+Get list of outgoing traffic records from the kernel module.
+
+--------------------------------------------------------------------------------
+int make_cgroup_with_pid(char *dpg_name, char *app_path)
+
+Creates a cgroup named dkg_name if needed and place current process to that cgroup.
+
+dpkg_name - name of cgroup
+app_path - used only for debugging
+
+Returns 0 on success -errno on error
+
+Notes:
+The name is misleading, PID is not even accepted as a parameter.
+app_path is used only for debugging and not anywhere in the code
+
+--------------------------------------------------------------------------------
+void notify_daemon(void)
+
+Sends SIGUSR1 to the daemon.
+
+--------------------------------------------------------------------------------
+resman_ret_c resman_perf_info_foreach(const resman_perf_selection_rule *rule,
+				resman_perf_info_cb info_cb, void *user_data)
+
+Processes network usage statistics based on supplied rule.
+
+rule - the rule used for statistics selection
+info_cb - callback performed on each record
+user_data - pointer passed as argument 3 to the callback
+
+Notes:
+Actual behavior depends largely on the rule.
+
+--------------------------------------------------------------------------------
+resman_ret_c resman_sql_rules_exec(const resman_exec_context *context)
+
+Performs the actual query and calls callback on each record.
+
+context - contains the rule and callback
+
+Note:
+Internal function.
+
+--------------------------------------------------------------------------------
+resman_ret_c resman_sql_simple_exec(const resman_exec_context *context)
+
+Performs the basic statistics query and calls callback on each record.
+
+context - contains the rule and callback
+
+Note:
+Internal function.
+
+--------------------------------------------------------------------------------
+void put_attr(rt_param *arg, int type, const void *data, int data_len)
+
+Write attribute to netlink packet. Helper function.
+
+--------------------------------------------------------------------------------
+int receive_answer(int sock, const int attr_type, char **out_buffer, __u16 *arg_count)
+
+Read answer from kernel module. Helper function.
+
+--------------------------------------------------------------------------------
+int revert_net_restriction(u_int32_t classid)
+
+Removes network restrictions set by apply_net_restriction.
+
+classid - network class ID which will be unrestricted
+
+Returns 0 on success, non-zero on failure.
+
+Note:
+Name is a bit misleading in that it removes restrictions, not reverts to previous ones.
+
+--------------------------------------------------------------------------------
+resman_ret_c revert_restriction(const char *app_id)
+
+Removes restrictions set by apply_restriction.
+
+app_id - zero-terminated string containing package name of application.
+
+Returns 0 on success
+PCL_ERROR_DB_FAILED - database error
+???? - any non-zero value could be returned by revert_net_restriction
+
+Notes:
+Does not actually modify CPU or memory limits, only writes new settings to database.
+Name is misleading in that the function removes restrictions, not reverts to previous ones.
+
+--------------------------------------------------------------------------------
+int send_command(int sock, const pid_t pid, const int family_id, __u8 cmd)
+
+Helper function for sending commands to kernel module.
+
+--------------------------------------------------------------------------------
+int send_restriction(int sock, const pid_t pid, const int family_id,
+		 const u_int32_t *classids, const u_int16_t classid_count,
+		 const enum traffic_restriction_type restriction_type)
+
+Internal function used for setting network restrictions.
+
+--------------------------------------------------------------------------------
+void send_start(int sock, const pid_t pid, const int family_id)
+
+Helper function used in communicating with kernel module.
+
+--------------------------------------------------------------------------------
+resman_ret_c set_datausage_quota(const char *app_id,
+			      const resman_datausage_quota *quota)
+
+Sets network traffic quota for application.
+
+app_id - zero-terminated string containing package name of the application.
+quota - network traffic quota to be applied to the application
+
+Returns:
+PCL_ERROR_OK - success
+PCL_ERROR_INVALID_PARAMETER - app_id or quota is NULL
+
+Note:
+Currently only writes quota limits to the database.
+

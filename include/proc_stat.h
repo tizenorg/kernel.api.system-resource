@@ -259,6 +259,12 @@ resourced_ret_c proc_cgroup_inactive(pid_t pid);
 resourced_ret_c proc_group_change_status(int type, pid_t pid, char* app_id);
 
 /**
+ * @desc Send process launch request
+ */
+resourced_ret_c proc_cgroup_launch(int type, pid_t pid, char* app_id, char* pkg_id);
+
+
+/**
  * @brief sweep memory about background processes
  *
  * @return return num of swept processes

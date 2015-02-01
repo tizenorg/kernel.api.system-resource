@@ -35,6 +35,13 @@ struct lowmem_data_type {
 	unsigned long *args;
 };
 
-int lowmem_control(enum lowmem_control_type type, unsigned long *args);
+#ifdef MEMORY_SUPPORT
+extern int lowmem_control(enum lowmem_control_type type, unsigned long *args);
+#else
+static inline int lowmem_control(enum lowmem_control_type type, unsigned long *args)
+{
+	return RESOURCED_ERROR_NONE;
+}
+#endif /* MEMORY_SUPPORT */
 
 #endif /* __LOWMEM_COMMON_H__ */

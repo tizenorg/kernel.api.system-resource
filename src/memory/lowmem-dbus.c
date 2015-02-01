@@ -91,9 +91,10 @@ static void lowmem_dbus_oom_trigger(void *data, DBusMessage *msg)
 {
 	DBusError err;
 	int ret;
+	int launching = 0;
+	int flags = OOM_FORCE;
 
 	ret = dbus_message_is_signal(msg, RESOURCED_INTERFACE_OOM, SIGNAL_NAME_OOM_TRIGGER);
-
 	if (ret == 0) {
 		_D("there is no oom trigger signal");
 		return;
@@ -101,12 +102,15 @@ static void lowmem_dbus_oom_trigger(void *data, DBusMessage *msg)
 
 	dbus_error_init(&err);
 
-	if (ret == 0) {
-		_D("there is no message");
-		return;
-	}
+	ret = dbus_message_get_args(msg, &err, DBUS_TYPE_INT32, &launching, DBUS_TYPE_INVALID);
 
-	lowmem_oom_killer_cb(MEMCG_MEMORY, 1);
+	if (launching)
+		flags |= OOM_NOMEMORY_CHECK;
+
+	change_memory_state(MEMNOTIFY_LOW, 1);
+	lowmem_oom_killer_cb(MEMCG_MEMORY, flags);
+	_D("flags = %d", flags);
+	change_memory_state(MEMNOTIFY_NORMAL, 0);
 }
 
 void lowmem_dbus_init(void)
