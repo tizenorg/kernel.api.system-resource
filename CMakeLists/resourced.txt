@@ -1,0 +1,264 @@
+CMAKE_MINIMUM_REQUIRED (VERSION 2.6)
+
+#CMake doesnt' support same project name for several TARGETS
+# libresourced uses it
+PROJECT(resource_d)
+
+SET(CMAKE_EXTRA_INCLUDE_FILES unistd.h)
+
+INCLUDE_DIRECTORIES(${RESOURCED_INCLUDEDIR}
+  ${RESOURCED_SOURCE_DIR}
+  ${LOGGING_SOURCE_DIR}/include
+  ${MEMORY_SOURCE_DIR}
+  ${PROC-STAT_SOURCE_DIR}/include
+  ${APP-STAT_SOURCE_DIR}/include
+  ${NETWORK_SOURCE_DIR}/include)
+
+SET (HEADERS
+  ${NETWORK_SOURCE_DIR}/include/datausage-vconf-callbacks.h
+  ${NETWORK_SOURCE_DIR}/include/iface-cb.h
+  ${INCLUDE_COMMON_DIR}/config.h
+  ${INCLUDE_COMMON_DIR}/config-parser.h
+  ${INCLUDE_COMMON_DIR}/const.h
+  ${INCLUDE_COMMON_DIR}/daemon-options.h
+  ${INCLUDE_COMMON_DIR}/macro.h
+  ${INCLUDE_COMMON_DIR}/logging-common.h
+  ${INCLUDE_COMMON_DIR}/lowmem-common.h
+  ${INCLUDE_COMMON_DIR}/module-data.h
+  ${INCLUDE_COMMON_DIR}/module.h
+  ${INCLUDE_COMMON_DIR}/swap-common.h
+)
+
+SET (SOURCES
+  ${COMMON_SOURCE_DIR}/cgroup.c
+  ${COMMON_SOURCE_DIR}/notifier.c
+  ${COMMON_SOURCE_DIR}/appid-helper.c
+  ${COMMON_SOURCE_DIR}/config-parser.c
+  ${COMMON_SOURCE_DIR}/edbus-handler.c
+  ${COMMON_SOURCE_DIR}/file-helper.c
+  ${COMMON_SOURCE_DIR}/module-data.c
+  ${COMMON_SOURCE_DIR}/module.c
+  ${NETWORK_SOURCE_DIR}/counter.c
+  ${PROC-STAT_SOURCE_DIR}/proc-handler.c
+  ${PROC-STAT_SOURCE_DIR}/proc-main.c
+  ${PROC-STAT_SOURCE_DIR}/proc-noti.c
+  ${PROC-STAT_SOURCE_DIR}/proc-process.c
+  ${PROC-STAT_SOURCE_DIR}/proc-monitor.c
+  ${RESOURCED_SOURCE_DIR}/init.c
+  ${RESOURCED_SOURCE_DIR}/main.c
+  )
+
+INSTALL(FILES ${DATA_DIR}/${EXCLUDE_LIST_FILE_NAME} DESTINATION /usr/etc)
+#network module
+IF("${NETWORK_MODULE}" STREQUAL "ON")
+
+  IF("${DATAUSAGE_TYPE}" STREQUAL "NFACCT")
+    SET(CONFIG_DATAUSAGE_NFACCT 1)
+    SET(SOURCES ${SOURCES}
+      ${NETWORK_SOURCE_DIR}/nfacct-rule.c
+      ${NETWORK_SOURCE_DIR}/nf-restriction.c
+    )
+  ELSE()
+    SET(SOURCES ${SOURCES}
+      ${NETWORK_SOURCE_DIR}/generic-netlink.c
+      ${NETWORK_SOURCE_DIR}/ktgrabber-restriction.c
+    )
+  ENDIF()
+
+  SET(SOURCES ${SOURCES}
+    ${NETWORK_SOURCE_DIR}/counter-process.c
+    ${NETWORK_SOURCE_DIR}/daemon-options.c
+    ${NETWORK_SOURCE_DIR}/datausage-quota-processing.c
+    ${NETWORK_SOURCE_DIR}/datausage-vconf-callbacks.c
+    ${NETWORK_SOURCE_DIR}/datausage-vconf-common.c
+    ${NETWORK_SOURCE_DIR}/specific-trace.c
+    ${NETWORK_SOURCE_DIR}/datausage-common.c
+    ${NETWORK_SOURCE_DIR}/iface-cb.c
+    ${NETWORK_SOURCE_DIR}/nl-helper.c
+    ${NETWORK_SOURCE_DIR}/notification.c
+    ${NETWORK_SOURCE_DIR}/restriction-handler.c
+    ${NETWORK_SOURCE_DIR}/restriction-helper.c
+    ${NETWORK_SOURCE_DIR}/restriction-local.c
+    ${NETWORK_SOURCE_DIR}/tethering-restriction.c
+    )
+
+   IF ("${TETHERING_FEATURE}" STREQUAL "ON")
+	SET(TETHERING_FEATURE 1)
+   ENDIF()
+
+   INSTALL(FILES ${NETWORK_SOURCE_DIR}/network.conf
+		DESTINATION /etc/resourced)
+
+ENDIF()
+
+IF("${VIP_AGENT}" STREQUAL "ON")
+  SET(SOURCES ${SOURCES}
+     ${VIP_SOURCE_DIR}/vip-process.c
+    )
+ENDIF()
+
+#logging module
+IF("${LOGGING_MODULE}" STREQUAL "ON")
+  SET(SOURCES ${SOURCES}
+    ${LOGGING_SOURCE_DIR}/logging.c
+    )
+  ADD_DEFINITIONS("-DLOGGING_SUPPORT")
+#logging memory
+  IF("${LOGGING_MEMORY}" STREQUAL "ON")
+    SET(SOURCES ${SOURCES}
+      ${MEMORY_SOURCE_DIR}/logging-memory.c
+      )
+  ENDIF()
+#logging cpu
+  IF("${LOGGING_CPU}" STREQUAL "ON")
+    SET(SOURCES ${SOURCES}
+      ${CPU_SOURCE_DIR}/logging-cpu.c
+      )
+  ENDIF()
+ENDIF()
+
+#memory module
+IF("${MEMORY_MODULE}" STREQUAL "ON")
+  SET(SOURCES ${SOURCES}
+    ${MEMORY_SOURCE_DIR}/lowmem-dbus.c
+  )
+  IF("${MEMORY_CGROUP}" STREQUAL "ON")
+    SET(SOURCES ${SOURCES}
+      ${MEMORY_SOURCE_DIR}/vmpressure-lowmem-handler.c
+    )
+  ELSE()
+    SET(SOURCES ${SOURCES}
+      ${MEMORY_SOURCE_DIR}/lowmem-handler.c
+    )
+  ENDIF()
+  ADD_DEFINITIONS("-DMEMORY_SUPPORT")
+ENDIF()
+
+#swap module
+IF("${SWAP_MODULE}" STREQUAL "ON")
+  SET(SOURCES ${SOURCES}
+    ${SWAP_SOURCE_DIR}/swap.c
+    )
+  ADD_DEFINITIONS("-DSWAP_SUPPORT")
+ENDIF()
+
+IF("${CPU_MODULE}" STREQUAL "ON")
+  SET(SOURCES ${SOURCES}
+    ${CPU_SOURCE_DIR}/cpu.c
+    )
+ENDIF()
+
+IF("${TIMER_SLACK}" STREQUAL "ON")
+  SET(SOURCES ${SOURCES}
+    ${TIMER_SOURCE_DIR}/timer-slack.c
+    )
+ENDIF()
+
+SET (REQUIRES_LIST ${REQUIRES_LIST}
+	ecore
+	dlog
+	glib-2.0
+        sqlite3
+	vconf
+	vconf-internal-keys
+	ecore-file
+	eina
+	edbus
+	libsystemd-daemon
+	journal
+)
+
+IF("${LOGGING_MODULE}" STREQUAL "ON")
+  SET (REQUIRES_LIST ${REQUIRES_LIST}
+	libsystemd-journal
+  )
+ENDIF()
+
+INCLUDE(FindPkgConfig)
+pkg_check_modules(daemon_pkgs REQUIRED ${REQUIRES_LIST})
+
+FOREACH(flag ${daemon_pkgs_CFLAGS})
+        SET(EXTRA_CFLAGS "${EXTRA_CFLAGS} ${flag} -pthread")
+ENDFOREACH(flag)
+
+SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${EXTRA_CFLAGS}")
+
+CONFIGURE_FILE(${INCLUDE_COMMON_DIR}/config.h.in
+  ${INCLUDE_COMMON_DIR}/config.h)
+
+ADD_EXECUTABLE(hashtest ${UTILS_SOURCE_DIR}/hashtest.c)
+TARGET_LINK_LIBRARIES(hashtest ${daemon_pkgs_LDFLAGS})
+
+ADD_EXECUTABLE(cgroup-test ${UTILS_SOURCE_DIR}/cgroup-test.c
+	${COMMON_SOURCE_DIR}/cgroup.c
+	${COMMON_SOURCE_DIR}/file-helper.c
+	${COMMON_SOURCE_DIR}/appid-helper.c
+	${NETWORK_SOURCE_DIR}/net-cls-cgroup.c
+	)
+TARGET_LINK_LIBRARIES(cgroup-test ${daemon_pkgs_LDFLAGS} "-L/lib/ -lrt")
+
+ADD_EXECUTABLE (${PROJECT_NAME} ${HEADERS} ${SOURCES})
+TARGET_LINK_LIBRARIES(${PROJECT_NAME}
+  ${daemon_pkgs_LDFLAGS}
+)
+
+IF("${NETWORK_MODULE}" STREQUAL "ON")
+  TARGET_LINK_LIBRARIES(${PROJECT_NAME}
+    resourced
+    app-stat
+    storage
+    settings
+    net-cls
+    roaming
+    net-iface
+  )
+
+  IF("${CMAKE_BUILD_TYPE}" STREQUAL  "DEBUG")
+	ADD_EXECUTABLE(test-udp-server ${UTILS_SOURCE_DIR}/udp-server.c ${UTILS_SOURCE_DIR}/udp-common.c)
+	ADD_EXECUTABLE(test-udp-client ${UTILS_SOURCE_DIR}/udp-client.c ${UTILS_SOURCE_DIR}/udp-common.c)
+  ADD_EXECUTABLE(iface-test ${UTILS_SOURCE_DIR}/iface-test.c)
+  TARGET_LINK_LIBRARIES(iface-test net-iface ${daemon_pkgs_LDFLAGS})
+
+  ENDIF()
+
+  INSTALL(FILES ${DATA_DIR}/traffic_db.sql
+    DESTINATION /usr/share)
+ENDIF()
+
+INSTALL(FILES ${INCLUDE_PUBLIC_DIR}/resourced.h DESTINATION include/system)
+
+SET_TARGET_PROPERTIES(${PROJECT_NAME} PROPERTIES SKIP_BUILD_RPATH true)
+INSTALL(FILES ${PROJECT_NAME}
+  DESTINATION ${MAKE_INSTALL_PREFIX}/usr/bin RENAME resourced
+  PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE WORLD_EXECUTE)
+
+IF("${MEMORY_ENG}" STREQUAL "ON")
+  INSTALL(FILES ${MEMORY_SOURCE_DIR}/memory_eng.conf
+    DESTINATION /etc/resourced RENAME memory.conf)
+ELSE()
+  INSTALL(FILES ${MEMORY_SOURCE_DIR}/memory_user.conf
+    DESTINATION /etc/resourced RENAME memory.conf)
+ENDIF()
+
+IF("${SWAP_MODULE}" STREQUAL "ON")
+	INSTALL(PROGRAMS ${CMAKE_BINARY_DIR}/scripts/resourced-zram.sh DESTINATION bin)
+ENDIF()
+
+IF("${CPU_MODULE}" STREQUAL "ON")
+  INSTALL(FILES ${CPU_SOURCE_DIR}/cpu.conf
+    DESTINATION /etc/resourced RENAME cpu.conf)
+ELSE()
+  INSTALL(PROGRAMS ${CMAKE_BINARY_DIR}/scripts/resourced-cpucgroup.sh DESTINATION bin)
+ENDIF()
+
+IF("${TIMER_SLACK}" STREQUAL "ON")
+  INSTALL(FILES ${TIMER_SOURCE_DIR}/timer-slack.conf
+    DESTINATION /etc/resourced RENAME timer-slack.conf)
+ENDIF()
+
+IF("${VIP_AGENT}" STREQUAL "ON")
+ADD_EXECUTABLE(vip-release-agent ${VIP_SOURCE_DIR}/vip-release-agent.c)
+TARGET_LINK_LIBRARIES(vip-release-agent dlog)
+INSTALL(TARGETS vip-release-agent DESTINATION /usr/bin)
+INSTALL(FILES ${VIP_SOURCE_DIR}/vip-process.conf DESTINATION /etc/resourced RENAME vip-process.conf)
+ENDIF()

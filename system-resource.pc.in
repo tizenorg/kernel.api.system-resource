@@ -1,0 +1,16 @@
+# Package Information for pkg-config
+#
+# Copyright (c) 2012 Samsung Electronics Co., Ltd.
+# All rights reserved.
+#
+
+libdir=@LIBDIR@
+includedir=@INCLUDEDIR@
+
+Name: @PC_NAME_DEPRECATED@
+Description: @PACKAGE_DESCRIPTION@
+Version: @VERSION@
+Requires: @PC_REQUIRED@
+Libs: -L${libdir} @PC_PROVIDED_LIBS@
+Cflags: @PC_CFLAGS@
+

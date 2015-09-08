@@ -1,0 +1,14 @@
+PCL stands for Performance Control Library.
+
+The libresourced library is designed for accounting and limiting CPU, memory and bandwidth usage of all installed applications and daemons. It provides interface for setting limits and quotas and reading statistics.
+
+- CPU and memory usage are tracked and limited using cpu_acct and mem cgroup controllers
+- Network traffic is controlled by special kernel module which works in conjunction with user-space daemon
+
+Network control is performed on 3rd layer of network subsystem using nethooks. To determine which application sent a packet, the netcls cgroup controller is used which tags all outgoing packets.
+There is no direct way to determine to which application an incoming packet belongs. This is solved by comparing destination host/port pairs of incoming packets to known host/port pairs of sent packets.
+There is also a backup way of determining the packet owner by parsing all the tracked applications' /proc entries.
+
+The daemon periodically collects the data from kernel module and stores it into sqlite database.
+
+Communication between daemon and kernel module is done using netlink interface.

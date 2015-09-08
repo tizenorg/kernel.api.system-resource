@@ -1,0 +1,69 @@
+Table of context
+---------------
+
+1. ERD - Entity relation diagram
+2. Statistics entity
+3. Restrictions entity
+4. Quotas entity
+5. Effective quota entity
+
+
+1. ERD
+
+   +----------------------------+     +--------------------+    +-------------+
+   |         restrictions       |     |    statistics      |    |     quotas  |
+   |----------------------------|     |--------------------|    |-------------|
+   |binpath: TEXT               |<--->|binpath: TEXT       |<-->|binpath      |
+   |cpu: INT                    |  |  |received: BIGINT    |    |sent_quota   |
+   |mem: INT                    |  |  |sent: BIGINT        |    |rcv_quota    |
+   |incomming_rate: INT         |  |  |time_stamp: BIGINT  |    |time_period  |
+   |outgoing_rate: INT          |  |  |ifname: TEXT        |    |start_time   |
+   |                            |  |  |ifmac: TEXT         |    +-------------+
+   |                            |  |  |                    |
+   |                            |  |  |                    |
+   +----------------------------+  |  +--------------------+
+                                   |
+                                   |
+                                   |  +---------------------------+
+                                   |  |   effective_quota         |
+                                   |  |---------------------------|
+                                   +->|binpath                    |
+                                      |sent_used_quota            |
+                                      |rcv_used_quota             |
+                                      |start_time                 |
+                                      |finish_time                |
+                                      |                           |
+                                      +---------------------------+
+
+2. Statistics entity
+--------------------
+Holds information about counted traffic per time points, time_stamp - it's time
+point. Accumulation of the information proceses in main loop of perf-controld.
+
+
+3. Restrictions entity
+----------------------
+Holds information about restriction see set_restriction function. Every time we
+set restriction we store it in the database, it give us an ability to apply
+restriction for example after reboot.
+TODO: Possible bug. We don't separate quota based restriction and user based.
+User based restriction should be applied without conditions, quota based should
+be checked is quota active.
+
+
+4. Quotas entity
+----------------
+Holds information about quota.
+
+
+5. Effective quota entity
+-------------------------
+Holds information about active quota. One enty per quotas time interval.
+
+
+     | time period | time period | time period |
+------------------------------------------------------------------------------>
+     ^             ^             ^
+     start time    finish time   finish time
+                   start time    start time
+time line

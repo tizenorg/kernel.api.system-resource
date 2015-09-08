@@ -1,0 +1,8 @@
+<manifest>
+	<define>
+		<domain name="resourced"/>
+	</define>
+	<request>
+		<domain name="resourced"/>
+	</request>
+</manifest>

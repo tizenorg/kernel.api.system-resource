@@ -1,0 +1,10 @@
+[Unit]
+Description=prepare zram
+After=default.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/resourced-zram.sh
+
+[Install]
+WantedBy=graphical.target

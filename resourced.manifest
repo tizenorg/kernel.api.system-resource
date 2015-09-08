@@ -1,0 +1,14 @@
+<manifest>
+	<define>
+		<domain name="resourced"/>
+		<provide>
+			<label name="resourced::db"/>
+		</provide>
+	</define>
+	<assign>
+		<filesystem path="/opt/usr/dbspace/.resourced-datausage.db*" label="resourced::db"/>
+	</assign>
+	<request>
+		<domain name="resourced"/>
+	</request>
+</manifest>

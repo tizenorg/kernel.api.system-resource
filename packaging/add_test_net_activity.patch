@@ -1,0 +1,44 @@
+diff --git a/CMakeLists/resourced.txt b/CMakeLists/resourced.txt
+index f0b6f36..856c387 100644
+--- a/CMakeLists/resourced.txt
++++ b/CMakeLists/resourced.txt
+@@ -108,3 +108,17 @@ INSTALL(FILES ${DATA_DIR}/resourced
+   PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE WORLD_READ)
+ INSTALL(FILES ${DATA_DIR}/traffic_db.sql
+   DESTINATION /usr/share)
++
++IF("${CMAKE_BUILD_TYPE}" STREQUAL  "DEBUG")
++	SET(NET_ACTIVITY_PROJECT test_net_activity)
++	ADD_EXECUTABLE(${NET_ACTIVITY_PROJECT}
++		${UTILS_SOURCE_DIR}/test-net-activity.c)
++	TARGET_LINK_LIBRARIES(${NET_ACTIVITY_PROJECT} ${daemon_pkgs_LDFLAGS}
++		resourced)
++	INSTALL(FILES ${NET_ACTIVITY_PROJECT}
++		DESTINATION ${MAKE_INSTALL_PREFIX}/usr/bin
++		PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE WORLD_EXECUTE)
++
++ENDIF()
++
++
+
+diff --git a/packaging/system-resource.spec b/packaging/system-resource.spec
+index cad7917..bc90f26 100644
+--- a/packaging/system-resource.spec
++++ b/packaging/system-resource.spec
+@@ -73,7 +73,7 @@ echo "\
+ #define MAJOR_VERSION ${MAJORVER}
+ #define PATCH_VERSION ${PATCHVER}" > src/common/version.h
+ 
+-cmake . -DCMAKE_INSTALL_PREFIX=/usr -DFULLVER=%{version} -DMAJORVER=${MAJORVER} -DCMAKE_BUILD_TYPE=Release \
++cmake . -DCMAKE_INSTALL_PREFIX=/usr -DFULLVER=%{version} -DMAJORVER=${MAJORVER} -DCMAKE_BUILD_TYPE=DEBUG \
+ 	-DEXCLUDE_LIST_FILE_NAME=%{exclude_list_file_name} \
+ 	-DEXCLUDE_LIST_FULL_PATH=%{exclude_list_full_path} -DDATABASE_FULL_PATH=%{database_full_path} \
+ 	-DEXCLUDE_LIST_OPT_FULL_PATH=%{exclude_list_opt_full_path}
+@@ -149,6 +149,7 @@ touch %{exclude_list_opt_full_path}
+ %config(noreplace) %attr(660,root,app) %{database_full_path}
+ %config(noreplace) %attr(660,root,app) %{database_full_path}-journal
+ /usr/bin/datausagetool
++/usr/bin/test_net_activity
+ %config %{_sysconfdir}/dbus-1/system.d/resourced.conf
+ %{_libdir}/systemd/system/resourced.service
+ %{_libdir}/systemd/system/multi-user.target.wants/resourced.service
