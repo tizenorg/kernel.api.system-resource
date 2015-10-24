@@ -35,8 +35,8 @@
 #include "const.h"
 #include "timer-slack.h"
 #include "notifier.h"
-#include "proc-main.h"
-#include "proc-process.h"
+#include "procfs.h"
+#include "proc-common.h"
 
 #include <resourced.h>
 #include <trace.h>
@@ -99,7 +99,7 @@ static int timer_slack_write(char *sub_cgroup, char *node, int val)
 	return ret;
 }
 
-static int launch_service(void *data)
+static int control_timer_state(void *data)
 {
 	struct proc_status *p_data = (struct proc_status*)data;
 	int ret;
@@ -238,7 +238,7 @@ static int resourced_timer_slack_init(void *data)
 
 	timer_slack_cgroup_init();
 
-	register_notifier(RESOURCED_NOTIFIER_SERVICE_LAUNCH, launch_service);
+	register_notifier(RESOURCED_NOTIFIER_SERVICE_LAUNCH, control_timer_state);
 	register_notifier(RESOURCED_NOTIFIER_APP_RESUME, wakeup_timer_state);
 	register_notifier(RESOURCED_NOTIFIER_APP_FOREGRD, wakeup_timer_state);
 	register_notifier(RESOURCED_NOTIFIER_APP_BACKGRD, background_timer_state);
@@ -246,12 +246,14 @@ static int resourced_timer_slack_init(void *data)
 	register_notifier(RESOURCED_NOTIFIER_APP_INACTIVE, inactive_timer_state);
 	register_notifier(RESOURCED_NOTIFIER_LCD_ON, timer_lcd_on);
 	register_notifier(RESOURCED_NOTIFIER_LCD_OFF, timer_lcd_off);
+	register_notifier(RESOURCED_NOTIFIER_WIDGET_FOREGRD, wakeup_timer_state);
+	register_notifier(RESOURCED_NOTIFIER_WIDGET_BACKGRD, control_timer_state);
 	return RESOURCED_ERROR_NONE;
 }
 
 static int resourced_timer_slack_finalize(void *data)
 {
-	unregister_notifier(RESOURCED_NOTIFIER_SERVICE_LAUNCH, launch_service);
+	unregister_notifier(RESOURCED_NOTIFIER_SERVICE_LAUNCH, control_timer_state);
 	unregister_notifier(RESOURCED_NOTIFIER_APP_RESUME, wakeup_timer_state);
 	unregister_notifier(RESOURCED_NOTIFIER_APP_FOREGRD, wakeup_timer_state);
 	unregister_notifier(RESOURCED_NOTIFIER_APP_BACKGRD, background_timer_state);
@@ -259,6 +261,8 @@ static int resourced_timer_slack_finalize(void *data)
 	unregister_notifier(RESOURCED_NOTIFIER_APP_INACTIVE, inactive_timer_state);
 	unregister_notifier(RESOURCED_NOTIFIER_LCD_ON, timer_lcd_on);
 	unregister_notifier(RESOURCED_NOTIFIER_LCD_OFF, timer_lcd_off);
+	unregister_notifier(RESOURCED_NOTIFIER_WIDGET_FOREGRD, wakeup_timer_state);
+	unregister_notifier(RESOURCED_NOTIFIER_WIDGET_BACKGRD, control_timer_state);
 	return RESOURCED_ERROR_NONE;
 }
 

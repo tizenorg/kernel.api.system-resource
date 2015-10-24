@@ -29,6 +29,7 @@
 #ifndef RESOURCED_TETHERING_RESTRICTION_H_
 #define RESOURCED_TETHERING_RESTRICTION_H_
 
+#include "trace.h"
 #include "transmission.h"
 
 #define PATH_TO_PROC_IP_FORWARD "/proc/sys/net/ipv4/ip_forward"

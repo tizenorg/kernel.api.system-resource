@@ -32,6 +32,8 @@
 #include "proc-monitor.h"
 #include "trace.h"
 #include "version.h"
+#include "edbus-handler.h"
+#include "notifier.h"
 
 #include <Ecore.h>
 #include <mcheck.h>
@@ -41,7 +43,6 @@ int main(int argc, char **argv)
 {
 	int ret_code = 0;
 	struct daemon_arg darg = { argc, argv, NULL };
-	struct modules_arg marg;
 
 #ifdef DEBUG_ENABLED
 	mtrace();
@@ -50,16 +51,20 @@ int main(int argc, char **argv)
 	ret_code = resourced_init(&darg);
 	ret_value_msg_if(ret_code < 0, ret_code,
 			 "Resourced initialization failed\n");
-	init_modules_arg(&marg, &darg);
-	modules_check_runtime_support(&marg);
-	modules_init(&marg);
-	ret_code = resourced_proc_init(darg.opts);
-	if (ret_code < 0)
-		_E("Proc init failed");
+	init_modules_arg(&darg);
+	modules_check_runtime_support(NULL);
+	if (check_dbus_active()) {
+		_I("notify relaunch");
+		modules_init(NULL);
+		resourced_notify(RESOURCED_NOTIFIER_BOOTING_DONE, NULL);
+	} else {
+		_I("lauch resourced at first");
+		modules_early_init(NULL);
+	}
 	sd_notify(0, "READY=1");
 
 	ecore_main_loop_begin();
-	modules_exit(&marg);
-	resourced_deinit(&darg);
+	modules_exit(NULL);
+	resourced_deinit();
 	return ret_code;
 }

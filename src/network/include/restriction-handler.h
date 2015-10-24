@@ -28,7 +28,7 @@
 #define _RESOURCED_RESTRICTION_HANDLER_H_
 
 #include "iface.h"
-#include "roaming.h"
+#include "telephony.h"
 
 /**
  * @brief This function allocates structure
@@ -36,12 +36,6 @@
  * It's necessary to free memory after usage.
  */
 iface_callback *create_restriction_callback(void);
-
-/**
- * @brief This function returns pointer to roaming
- * callback. No need to free memory.
- */
-roaming_cb get_roaming_restriction_cb(void);
 
 void reactivate_restrictions(void);
 

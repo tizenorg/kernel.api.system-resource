@@ -8,7 +8,7 @@ libdir=@LIBDIR@
 includedir=@INCLUDEDIR@
 
 Name: @PC_NAME@
-Description: @PACKAGE_DESCRIPTION@
+Description: Tizen Resource management library
 Version: @VERSION@
 Requires: @PC_REQUIRED@
 Libs: -L${libdir} @PC_PROVIDED_LIBS@

@@ -28,16 +28,27 @@
 enum module_priority {
 	MODULE_PRIORITY_NORMAL,
 	MODULE_PRIORITY_HIGH,
+	MODULE_PRIORITY_EARLY,
+	MODULE_PRIORITY_ALL,
 };
+
+enum module_state {
+	MODULE_NONINITIALIZED,
+	MODULE_INITIALIZED,
+};
+
 
 struct module_ops {
 	enum module_priority priority;
+	enum module_state initalized;
 	const char *name;
 	int (*init) (void *data);
 	int (*exit) (void *data);
 	int (*check_runtime_support) (void *data);
 	int (*control) (void *data);
 	int (*status) (void *data);
+	int (*dump) (FILE *fp, int mode, void *dump_data);
+	void *dump_data;
 };
 
 void add_module(const struct module_ops *module);
@@ -45,7 +56,10 @@ void remove_module(const struct module_ops *module);
 
 void modules_check_runtime_support(void *data);
 void modules_init(void *data);
+void modules_early_init(void *data);
+void modules_late_init(void *data);
 void modules_exit(void *data);
+void modules_dump(FILE *fp, int mode);
 
 const struct module_ops *find_module(const char *name);
 

@@ -30,21 +30,34 @@
 #define _TRESOURCED_DATAUSAGE_QUOTA_PROCESSING_H_
 
 #include <sqlite3.h>
+#include <stdbool.h>
 
-#include "app-stat.h"
-#include "resourced.h"
+#include "data_usage.h"
+
+struct serialization_quota {
+	int time_period;
+	int64_t snd_quota;
+	int64_t rcv_quota;
+	int snd_warning_threshold;
+	int rcv_warning_threshold;
+	resourced_state_t quota_type;
+	resourced_iface_type iftype;
+	time_t start_time;
+	resourced_roaming_type roaming_type;
+	char *imsi_hash;
+};
 
 /*
  * Store data in effective quota
  */
 void flush_quota_table(void);
 
+struct counter_arg;
 /*
  * Quota processing. It's apply quota if needed.
  * And actualize current quotas state.
  */
-resourced_ret_c process_quota(struct application_stat_tree *apps,
-	volatile struct daemon_opts *opts);
+resourced_ret_c process_quota(struct counter_arg *carg);
 
 /*
  * Finish working with quotas
@@ -54,8 +67,30 @@ void finalize_quotas(void);
 /*
  * Delete quota and drop remove restriction
  */
-void update_quota_state(const char *app_id, const resourced_iface_type iftype,
-	const time_t start_time, const int time_period,
-	const resourced_roaming_type roaming);
+void update_quota_state(const char *app_id, const int quota_id,
+		struct serialization_quota *ser_quota);
+
+void remove_quota_from_counting(const char *app_id, const resourced_iface_type iftype,
+	const resourced_roaming_type roaming,
+	const char *imsi);
+
+void clear_effective_quota(const char *app_id,
+	const resourced_iface_type iftype,
+	const resourced_roaming_type roaming,
+	const char *imsi_hash);
+
+resourced_ret_c get_quota_by_id(const int quota_id, data_usage_quota *du_quota);
+resourced_ret_c get_quota_by_appid(const char* app_id, const char *imsi_hash,
+		const resourced_iface_type iftype, resourced_roaming_type roaming_type,
+		data_usage_quota *du_quota, int *quota_id, resourced_state_t ground);
+/**
+ * @desc return true if we have applied background quota
+ */
+bool get_background_quota(void);
+
+
+bool check_quota_applied(const char *app_id, const resourced_iface_type iftype,
+		const resourced_roaming_type roaming, const char *imsi,
+		const resourced_state_t ground,	int *quota_id);
 
 #endif /* _TRESOURCED_DATAUSAGE_QUOTA_PROCESSING_H_ */

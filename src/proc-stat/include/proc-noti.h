@@ -39,9 +39,8 @@ struct resourced_noti { /** cgroup notification type **/
 
 #define SYNC_OPERATION(type) type == PROC_CGROUP_GET_MEMSWEEP || \
 	type == PROC_CGROUP_SET_RESUME_REQUEST || \
-	type == PROC_CGROUP_SET_TERMINATE_REQUEST
-
-int proc_noti_init(void);
+	type == PROC_CGROUP_SET_TERMINATE_REQUEST || \
+	type >= PROC_CGROUP_GET_CMDLINE
 
 
 #endif /*__PROC_HANDLER_H__*/

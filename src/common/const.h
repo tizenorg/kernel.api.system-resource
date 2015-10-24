@@ -20,9 +20,6 @@
 /*
  *  @file: const.h
  *
- *  @desc Application stat entity
- *  @version 1.0
- *
  */
 
 #ifndef _RESOURCED_CONST_H
@@ -34,12 +31,17 @@
 
 #define MAX_PATH_LENGTH 512
 #define MAX_NAME_LENGTH 256
+#define MAX_IFACE_LENGTH 32
+#define MAX_APPID_LENGTH 128
+#define MAX_PKGNAME_LENGTH 128
+
+#define PROC_BUF_MAX 64
+#define PROC_NAME_MAX 1024
 
 #define COMMA_DELIMETER ","
 
 #define COUNTER_UPDATE_PERIOD 60
-#define FLUSH_PERIOD 60
-#define STORE_DELAY_INTERVAL 1
+#define COUNTER_FLUSH_PERIOD 60
 
 #define NONE_QUOTA_ID 0
 
@@ -56,6 +58,9 @@ enum resourced_reserved_classid {
 						applications  */
 	RESOURCED_TETHERING_APP_CLASSID,	/**< it uses in user space logic
 						for counting tethering traffic */
+	RESOURCED_FOREGROUND_APP_CLASSID,	/* it will used for special cgroup,
+						   blocked cgroup */
+	RESOURCED_BACKGROUND_APP_CLASSID,
 	RESOURCED_RESERVED_CLASSID_MAX,
 };
 
@@ -64,6 +69,8 @@ enum resourced_counter_state {
 	RESOURCED_FORCIBLY_FLUSH_STATE = 1 << 1,
 	RESOURCED_FORCIBLY_QUIT_STATE = 1 << 2,
 	RESOURCED_NET_BLOCKED_STATE = 1 << 3,
+	RESOURCED_CHECK_QUOTA = 1 << 4,
+	RESOURCED_UPDATE_REQUESTED = 1 << 5,
 };
 
 #endif /* _RESOURCED_CONST_H */

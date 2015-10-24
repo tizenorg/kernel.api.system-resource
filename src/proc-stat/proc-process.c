@@ -27,170 +27,215 @@
 #include <sys/types.h>
 #include <Ecore.h>
 
+#include "freezer.h"
 #include "resourced.h"
 #include "trace.h"
 #include "proc-main.h"
 #include "cgroup.h"
 #include "proc-process.h"
+#include "procfs.h"
 #include "lowmem-common.h"
-#include "logging-common.h"
 #include "macro.h"
-#include "swap-common.h"
 #include "proc-noti.h"
 #include "notifier.h"
+#include "proc-appusage.h"
 
-#define PROC_OOM_SCORE_ADJ_PATH "/proc/%d/oom_score_adj"
 #define PROC_SWEEP_TIMER	3
 static GHashTable *proc_sweep_list;
-static Ecore_Timer *proc_sweep_timer = NULL;
+static Ecore_Timer *proc_sweep_timer;
 
 enum proc_background_type {
 	PROC_BACKGROUND_INACTIVE,
 	PROC_BACKGROUND_ACTIVE,
 };
 
-static int proc_backgrd_manage(int currentpid, int active)
+int proc_set_service_oomscore(const pid_t pid, const int oom_score)
 {
-	int pid = -1, pgid, ret;
-	struct proc_status proc_data;;
-	DIR *dp;
-	struct dirent dentry;
-	struct dirent *result;
+	int service_oom;
+	if (oom_score > 0)
+		service_oom = oom_score - OOMADJ_SERVICE_GAP;
+	else
+		service_oom = OOMADJ_SERVICE_DEFAULT;
+	return proc_set_oom_score_adj(pid, service_oom);
+}
+
+static void proc_set_oom_score_childs(GSList *childs, int oom_score_adj)
+{
+	GSList *iter;
+
+	if (!childs)
+		return;
+
+	gslist_for_each_item(iter, childs) {
+		struct child_pid *child = (struct child_pid *)(iter->data);
+		proc_set_oom_score_adj(child->pid, oom_score_adj);
+	}
+}
+
+static void proc_set_oom_score_services(int state, GSList *svcs,
+    int oom_score_adj)
+{
+	GSList *iter;
+
+	if (!svcs)
+		return;
+
+	gslist_for_each_item(iter, svcs) {
+		struct proc_app_info *svc = (struct proc_app_info *)(iter->data);
+		svc->state = state;
+		proc_set_service_oomscore(svc->main_pid, oom_score_adj);
+	}
+}
+
+static int proc_backgrd_manage(int currentpid, int active, int oom_score_adj)
+{
+	pid_t pid = -1;
+	int flag = RESOURCED_NOTIFIER_APP_BACKGRD;
+	struct proc_status ps;
 	FILE *fp;
 	char buf[sizeof(PROC_OOM_SCORE_ADJ_PATH) + MAX_DEC_SIZE(int)] = {0};
-	char appname[PROC_NAME_MAX];
-	int count = 0;
-	int candidatepid[16] = {0,};
-	int cur_oom = -1, prev_oom=OOMADJ_BACKGRD_UNLOCKED, select_pid=0;
-	static int checkprevpid = 0;
-	unsigned long swap_args[2] = {0,};
-	unsigned long logging_args[3] = {0,};
+	int cur_oom = -1;
+	static int checkprevpid;
+	int freeze_val = resourced_freezer_proc_late_control();
+	GSList *iter;
+	struct proc_program_info *ppi;
+	struct proc_app_info *pai = find_app_info(currentpid);
 
-	ret = proc_get_cmdline(currentpid, appname);
-	if (ret == RESOURCED_ERROR_NONE) {
-		ret = resourced_proc_excluded(appname);
-		if (!active && !ret) {
-			proc_data.pid = currentpid;
-			proc_data.appid = appname;
-			resourced_notify(RESOURCED_NOTIFIER_APP_BACKGRD, &proc_data);
-		}
-		if (ret) {
-			_D("BACKGRD MANAGE : don't manage background application by %d", currentpid);
-			return RESOURCED_ERROR_NONE;
+	if (!pai || pai->proc_exclude || pai->main_pid != currentpid) {
+		_D("BACKGRD MANAGE : don't manage background application by %d", currentpid);
+		return RESOURCED_ERROR_NONFREEZABLE;
+	}
+
+	ps.pid = currentpid;
+	ps.appid = pai->appid;
+	ps.pai = pai;
+	if (active)
+		flag = RESOURCED_NOTIFIER_APP_BACKGRD_ACTIVE;
+	resourced_notify(flag, &ps);
+
+	if (active)
+		return RESOURCED_ERROR_NONE;
+
+	if (checkprevpid != currentpid) {
+		gslist_for_each_item(iter, proc_app_list) {
+			struct proc_app_info *spi = (struct proc_app_info *)iter->data;
+			int new_oom;
+			int lru_offset = freeze_val;
+
+			if (!spi->main_pid || spi->type != PROC_TYPE_GUI)
+				continue;
+
+			pid = spi->main_pid;
+			snprintf(buf, sizeof(buf), PROC_OOM_SCORE_ADJ_PATH, pid);
+			fp = fopen(buf, "r+");
+			if (fp == NULL) {
+				spi->main_pid = 0;
+				continue;
+			}
+			if (fgets(buf, sizeof(buf), fp) == NULL) {
+				fclose(fp);
+				spi->main_pid = 0;
+				continue;
+			}
+			cur_oom = atoi(buf);
+
+			if (spi->lru_state == PROC_BACKGROUND) {
+				memset(&ps, 0, sizeof(struct proc_status));
+				ps.pai = spi;
+				ps.pid = pid;
+				resourced_notify(
+					    RESOURCED_NOTIFIER_APP_SUSPEND_READY,
+					    &ps);
+			}
+			/*
+			 * clear lru offset if platform controls background application
+			 */
+			if (spi->flags & PROC_BGCTRL_PLATFORM)
+				lru_offset = 0;
+
+			if (proc_check_lru_suspend(lru_offset, spi->lru_state) &&
+			    (proc_check_suspend_state(spi) == PROC_STATE_SUSPEND)) {
+				memset(&ps, 0, sizeof(struct proc_status));
+				ps.pai = spi;
+				ps.pid = pid;
+				resourced_notify(
+					    RESOURCED_NOTIFIER_APP_SUSPEND,
+					    &ps);
+			}
+
+			if (spi->lru_state >= PROC_BACKGROUND) {
+				spi->lru_state++;
+				if (spi->lru_state > PROC_LRU_MAX )
+					spi->lru_state = PROC_LRU_MAX;
+				_D("BACKGRD : process %d increase lru %d", pid, spi->lru_state);
+			}
+
+			if (cur_oom >= OOMADJ_APP_MAX) {
+				fclose(fp);
+				continue;
+			} else if (cur_oom >= OOMADJ_BACKGRD_UNLOCKED) {
+				new_oom = cur_oom + OOMADJ_APP_INCREASE;
+				_D("BACKGRD : process %d set score %d (before %d)",
+						pid, new_oom, cur_oom);
+				proc_set_oom_score_adj(pid, new_oom);
+				proc_set_oom_score_childs(spi->childs, new_oom);
+			}
+			fclose(fp);
 		}
 	}
 
-	dp = opendir("/proc");
-	if (!dp) {
-		_E("BACKGRD MANAGE : fail to open /proc");
-		return RESOURCED_ERROR_FAIL;
-	}
-	while (!(ret = readdir_r(dp, &dentry, &result)) && result != NULL) {
-
-		if (!isdigit(dentry.d_name[0]))
-			continue;
-
-		pid = atoi(dentry.d_name);
-		pgid = getpgid(pid);
-		if (!pgid)
-			continue;
-
-		snprintf(buf, sizeof(buf), PROC_OOM_SCORE_ADJ_PATH, pid);
-		fp = fopen(buf, "r+");
-		if (fp == NULL)
-			continue;
-		if (fgets(buf, sizeof(buf), fp) == NULL) {
-			fclose(fp);
-			continue;
-		}
-		cur_oom = atoi(buf);
-
-		logging_args[0] = (unsigned long)pid;
-		logging_args[1] = (unsigned long)pgid;
-		logging_args[2] = (unsigned long)cur_oom;
-		logging_control(LOGGING_INSERT_PROC_LIST, logging_args);
-
-		if (currentpid != pid && currentpid == pgid) {
-			proc_set_group(currentpid, pid);
-			fclose(fp);
-			continue;
-		}
-
-		if (active || checkprevpid == currentpid) {
-			fclose(fp);
-			continue;
-		}
-
-		if (select_pid != pid && select_pid == pgid && count < 16)
-		{
-			_D("found candidate child pid = %d, pgid = %d", pid, pgid);
-			candidatepid[count++] = pid;
-			fclose(fp);
-			continue;
-		}
-
-		swap_args[0] = (unsigned long)pid;
-		if (cur_oom > OOMADJ_BACKGRD_UNLOCKED && cur_oom > prev_oom
-				&& !swap_status(SWAP_CHECK_PID, swap_args)) {
-			count = 0;
-			candidatepid[count++] = pid;
-			select_pid = pid;
-			prev_oom = cur_oom;
-		}
-
-		if (cur_oom >= OOMADJ_APP_MAX) {
-			fclose(fp);
-			continue;
-		} else if (cur_oom >= OOMADJ_BACKGRD_UNLOCKED) {
-			_D("BACKGRD : process %d set score %d (before %d)",
-					pid, cur_oom+OOMADJ_APP_INCREASE, cur_oom);
-			fprintf(fp, "%d", cur_oom+OOMADJ_APP_INCREASE);
-		}
-		fclose(fp);
+	pai->lru_state = PROC_BACKGROUND;
+	if (proc_check_favorite_app(pai->appid)) {
+		_D("detect favorite application : %s", pai->appid);
+		oom_score_adj = OOMADJ_FAVORITE;
 	}
 
-	if (ret) {
-		_E("BACKGRD MANAGE : readdir_r on /proc directory failed");
-		closedir(dp);
-		return RESOURCED_ERROR_FAIL;
-	}
+	proc_set_oom_score_adj(pai->main_pid, oom_score_adj);
 
-	if (select_pid) {
-		_D("found candidate pid = %d, count = %d", candidatepid, count);
-		swap_args[0] = (unsigned long)candidatepid;
-		swap_args[1] = (unsigned long)count;
-		resourced_notify(RESOURCED_NOTIFIER_SWAP_SET_CANDIDATE_PID, swap_args);
-	}
+	/* change oom score about child pids */
+	proc_set_oom_score_childs(pai->childs, oom_score_adj);
+
+	/* change oom score about grouped service processes */
+	ppi = pai->program;
+	if (ppi && proc_get_svc_state(ppi) == PROC_STATE_BACKGROUND)
+		proc_set_oom_score_services(PROC_STATE_BACKGROUND, ppi->svc_list,
+		    oom_score_adj);
+
 	checkprevpid = currentpid;
-	closedir(dp);
-
-	logging_control(LOGGING_UPDATE_PROC_INFO, NULL);
-
 	return RESOURCED_ERROR_NONE;
 }
 
 static int proc_foregrd_manage(int pid, int oom_score_adj)
 {
 	int ret = 0;
-	GSList *iter;
-	struct proc_process_info_t *process_info =
-		find_process_info(NULL, pid, NULL);
+	struct proc_program_info *ppi;
+	struct proc_app_info *pai;
 
-	if (!process_info) {
-		ret = proc_set_oom_score_adj(pid, oom_score_adj);
-		return ret;
+	pai = find_app_info(pid);
+	if (!pai) {
+		proc_set_oom_score_adj(pid, oom_score_adj);
+		return RESOURCED_ERROR_NO_DATA;
 	}
 
-	gslist_for_each_item(iter, process_info->pids) {
-		struct pid_info_t *pid_info = (struct pid_info_t *)(iter->data);
-		ret = proc_set_oom_score_adj(pid_info->pid, oom_score_adj);
-	}
+	proc_set_oom_score_adj(pai->main_pid, oom_score_adj);
+
+	/* change oom score about child pids */
+	proc_set_oom_score_childs(pai->childs, oom_score_adj);
+
+	pai->lru_state = PROC_FOREGROUND;
+
+	/* change oom score about grouped service processes */
+	ppi = pai->program;
+	if (ppi)
+		proc_set_oom_score_services(PROC_STATE_FOREGROUND, ppi->svc_list,
+		    oom_score_adj);
+
 	return ret;
 }
 
 void proc_kill_victiom(gpointer key, gpointer value, gpointer user_data)
 {
-	int pid = *(gint*)key;
+	int pid = *(gint *)key;
 	int cur_oom = -1;
 	char buf[sizeof(PROC_OOM_SCORE_ADJ_PATH) + MAX_DEC_SIZE(int)] = {0};
 	FILE *fp;
@@ -206,7 +251,7 @@ void proc_kill_victiom(gpointer key, gpointer value, gpointer user_data)
 		return;
 	}
 	cur_oom = atoi(buf);
-	if (cur_oom >= OOMADJ_BACKGRD_UNLOCKED) {
+	if (cur_oom >= OOMADJ_FAVORITE) {
 		kill(pid, SIGKILL);
 		_D("sweep memory : background process %d killed by sigkill", pid);
 	}
@@ -225,10 +270,7 @@ static Eina_Bool proc_check_sweep_cb(void *data)
 int proc_sweep_memory(enum proc_sweep_type type, pid_t callpid)
 {
 	pid_t pid = -1;
-	int count=0, ret;
-	DIR *dp;
-	struct dirent dentry;
-	struct dirent *result;
+	int count = 0, ret;
 	FILE *fp;
 	gint *piddata;
 	char buf[sizeof(PROC_OOM_SCORE_ADJ_PATH) + MAX_DEC_SIZE(int)] = {0};
@@ -236,11 +278,9 @@ int proc_sweep_memory(enum proc_sweep_type type, pid_t callpid)
 
 	int cur_oom = -1;
 	int select_sweep_limit;
-	dp = opendir("/proc");
-	if (!dp) {
-		_E("BACKGRD MANAGE : fail to open /proc");
-		return RESOURCED_ERROR_FAIL;
-	}
+	GSList *iter;
+	struct proc_app_info *pai;
+
 	if (proc_sweep_timer)
 		ecore_timer_del(proc_sweep_timer);
 	if (proc_sweep_list)
@@ -248,17 +288,16 @@ int proc_sweep_memory(enum proc_sweep_type type, pid_t callpid)
 	proc_sweep_list = g_hash_table_new(g_int_hash, g_int_equal);
 
 	if (type == PROC_SWEEP_EXCLUDE_ACTIVE)
-		select_sweep_limit = OOMADJ_BACKGRD_UNLOCKED;
+		select_sweep_limit = OOMADJ_FAVORITE;
 	else
 		select_sweep_limit = OOMADJ_BACKGRD_LOCKED;
 
-	while (!(ret = readdir_r(dp, &dentry, &result)) && result != NULL) {
-		if (!isdigit(dentry.d_name[0]))
+	gslist_for_each_item(iter, proc_app_list) {
+		pai = (struct proc_app_info *)iter->data;
+		if (!pai->main_pid || pai->type != PROC_TYPE_GUI)
 			continue;
 
-		pid = atoi(dentry.d_name);
-		if (pid == callpid)
-			continue;
+		pid = pai->main_pid;
 
 		snprintf(buf, sizeof(buf), PROC_OOM_SCORE_ADJ_PATH, pid);
 		fp = fopen(buf, "r+");
@@ -275,7 +314,8 @@ int proc_sweep_memory(enum proc_sweep_type type, pid_t callpid)
 				fclose(fp);
 				continue;
 			}
-			proc_remove_process_list(pid);
+			resourced_proc_status_change(PROC_CGROUP_SET_TERMINATE_REQUEST,
+				    pid, NULL, NULL, PROC_TYPE_NONE);
 			piddata = g_new(gint, 1);
 			*piddata = pid;
 			g_hash_table_insert(proc_sweep_list, piddata, NULL);
@@ -286,96 +326,11 @@ int proc_sweep_memory(enum proc_sweep_type type, pid_t callpid)
 		}
 		fclose(fp);
 	}
-	if (ret) {
-		_E("BACKGRD MANAGE : readdir_r call on /proc failed");
-		closedir(dp);
-		return RESOURCED_ERROR_FAIL;
-	}
 	if (count > 0) {
 		proc_sweep_timer =
 			    ecore_timer_add(PROC_SWEEP_TIMER, proc_check_sweep_cb, (void *)proc_sweep_list);
 	}
-	closedir(dp);
 	return count;
-}
-
-
-int proc_get_cmdline(pid_t pid, char *cmdline)
-{
-	char buf[PROC_BUF_MAX];
-	char cmdline_buf[PROC_NAME_MAX];
-	char *filename;
-	FILE *fp;
-
-	snprintf(buf, sizeof(buf), "/proc/%d/cmdline", pid);
-	fp = fopen(buf, "r");
-	if (fp == NULL)
-		return RESOURCED_ERROR_FAIL;
-
-	if (fgets(cmdline_buf, PROC_NAME_MAX-1, fp) == NULL) {
-		fclose(fp);
-		return RESOURCED_ERROR_FAIL;
-	}
-	fclose(fp);
-
-	filename = strrchr(cmdline_buf, '/');
-	if (filename == NULL)
-		filename = cmdline_buf;
-	else
-		filename = filename + 1;
-
-	strncpy(cmdline, filename, PROC_NAME_MAX-1);
-
-	return RESOURCED_ERROR_NONE;
-}
-
-int proc_get_oom_score_adj(int pid, int *oom_score_adj)
-{
-	char buf[sizeof(PROC_OOM_SCORE_ADJ_PATH) + MAX_DEC_SIZE(int)] = {0};
-	FILE *fp = NULL;
-
-	if (pid < 0)
-		return RESOURCED_ERROR_FAIL;
-
-	snprintf(buf, sizeof(buf), PROC_OOM_SCORE_ADJ_PATH, pid);
-	fp = fopen(buf, "r");
-
-	if (fp == NULL) {
-		_E("fopen %s failed", buf);
-		return RESOURCED_ERROR_FAIL;
-	}
-	if (fgets(buf, sizeof(buf), fp) == NULL) {
-		fclose(fp);
-		return RESOURCED_ERROR_FAIL;
-	}
-	(*oom_score_adj) = atoi(buf);
-	fclose(fp);
-	return RESOURCED_ERROR_NONE;
-}
-
-int proc_set_oom_score_adj(int pid, int oom_score_adj)
-{
-	char buf[sizeof(PROC_OOM_SCORE_ADJ_PATH) + MAX_DEC_SIZE(int)] = {0};
-	FILE *fp;
-	unsigned long lowmem_args[2] = {0, };
-
-	snprintf(buf, sizeof(buf), PROC_OOM_SCORE_ADJ_PATH, pid);
-	fp = fopen(buf, "r+");
-	if (fp == NULL)
-		return RESOURCED_ERROR_FAIL;
-	if (fgets(buf, sizeof(buf), fp) == NULL) {
-		fclose(fp);
-		return RESOURCED_ERROR_FAIL;
-	}
-	fprintf(fp, "%d", oom_score_adj);
-	fclose(fp);
-
-	if (oom_score_adj >= OOMADJ_SU) {
-		lowmem_args[0] = (unsigned long)pid;
-		lowmem_args[1] = (unsigned long)oom_score_adj;
-		lowmem_control(LOWMEM_MOVE_CGROUP, lowmem_args);
-	}
-	return 0;
 }
 
 int proc_set_foregrd(pid_t pid, int oom_score_adj)
@@ -383,21 +338,22 @@ int proc_set_foregrd(pid_t pid, int oom_score_adj)
 	int ret = 0;
 
 	switch (oom_score_adj) {
-	case OOMADJ_FOREGRD_LOCKED:
 	case OOMADJ_FOREGRD_UNLOCKED:
 	case OOMADJ_SU:
 		ret = 0;
 		break;
+	case OOMADJ_FOREGRD_LOCKED:
 	case OOMADJ_BACKGRD_LOCKED:
 		ret = proc_foregrd_manage(pid, OOMADJ_FOREGRD_LOCKED);
 		break;
 	case OOMADJ_BACKGRD_UNLOCKED:
 	case OOMADJ_INIT:
+	case OOMADJ_FAVORITE:
 		ret = proc_foregrd_manage(pid, OOMADJ_FOREGRD_UNLOCKED);
 		break;
 	default:
 		if (oom_score_adj > OOMADJ_BACKGRD_UNLOCKED) {
-			ret = proc_set_oom_score_adj(pid, OOMADJ_FOREGRD_UNLOCKED);
+			ret = proc_foregrd_manage(pid, OOMADJ_FOREGRD_UNLOCKED);
 		} else {
 			ret = -1;
 		}
@@ -418,12 +374,10 @@ int proc_set_backgrd(int pid, int oom_score_adj)
 		ret = -1;
 		break;
 	case OOMADJ_FOREGRD_LOCKED:
-		proc_backgrd_manage(pid, PROC_BACKGROUND_ACTIVE);
-		ret = proc_set_oom_score_adj(pid, OOMADJ_BACKGRD_LOCKED);
+		ret = proc_backgrd_manage(pid, PROC_BACKGROUND_ACTIVE, OOMADJ_BACKGRD_LOCKED);
 		break;
 	case OOMADJ_FOREGRD_UNLOCKED:
-		proc_backgrd_manage(pid, PROC_BACKGROUND_INACTIVE);
-		ret = proc_set_oom_score_adj(pid, OOMADJ_BACKGRD_UNLOCKED);
+		ret = proc_backgrd_manage(pid, PROC_BACKGROUND_INACTIVE, OOMADJ_BACKGRD_UNLOCKED);
 		break;
 	case OOMADJ_INIT:
 		ret = proc_set_oom_score_adj(pid, OOMADJ_BACKGRD_UNLOCKED);
@@ -442,29 +396,36 @@ int proc_set_backgrd(int pid, int oom_score_adj)
 int proc_set_active(int pid, int oom_score_adj)
 {
 	int ret = 0;
+	struct proc_app_info *pai;
 
 	switch (oom_score_adj) {
 	case OOMADJ_FOREGRD_LOCKED:
 	case OOMADJ_BACKGRD_LOCKED:
 	case OOMADJ_SU:
-	case OOMADJ_INIT:
 		/* don't change oom value pid */
 		ret = -1;
 		break;
+	case OOMADJ_INIT:
 	case OOMADJ_FOREGRD_UNLOCKED:
 		ret = proc_set_oom_score_adj(pid, OOMADJ_FOREGRD_LOCKED);
 		break;
 	case OOMADJ_BACKGRD_UNLOCKED:
+		pai = find_app_info(pid);
+		if (pai)
+			pai->lru_state = PROC_ACTIVE;
 		ret = proc_set_oom_score_adj(pid, OOMADJ_BACKGRD_LOCKED);
 		break;
-	case OOMADJ_SERVICE_DEFAULT:
-	case OOMADJ_SERVICE_BACKGRD:
-		ret = proc_set_oom_score_adj(pid, OOMADJ_SERVICE_FOREGRD);
+	case OOMADJ_PREVIOUS_DEFAULT:
+	case OOMADJ_PREVIOUS_BACKGRD:
+		ret = proc_set_oom_score_adj(pid, OOMADJ_PREVIOUS_FOREGRD);
 		break;
 	default:
-		if (oom_score_adj > OOMADJ_BACKGRD_UNLOCKED)
+		if (oom_score_adj > OOMADJ_BACKGRD_UNLOCKED) {
+			pai = find_app_info(pid);
+			if (pai)
+				pai->lru_state = PROC_ACTIVE;
 			ret = proc_set_oom_score_adj(pid, OOMADJ_BACKGRD_LOCKED);
-		else
+		} else
 			ret = -1;
 		break;
 	}
@@ -474,7 +435,7 @@ int proc_set_active(int pid, int oom_score_adj)
 int proc_set_inactive(int pid, int oom_score_adj)
 {
 	int ret = 0;
-	struct proc_process_info_t * processinfo;
+	struct proc_app_info *pai;
 	switch (oom_score_adj) {
 	case OOMADJ_FOREGRD_UNLOCKED:
 	case OOMADJ_BACKGRD_UNLOCKED:
@@ -487,12 +448,14 @@ int proc_set_inactive(int pid, int oom_score_adj)
 		ret = proc_set_oom_score_adj(pid, OOMADJ_FOREGRD_UNLOCKED);
 		break;
 	case OOMADJ_BACKGRD_LOCKED:
-		processinfo = find_process_info(NULL, pid, NULL);
-		if (processinfo)
+		pai = find_app_info(pid);
+		if (pai) {
+			pai->lru_state = PROC_BACKGROUND;
 			ret = proc_set_oom_score_adj(pid, OOMADJ_BACKGRD_UNLOCKED);
+		}
 		break;
-	case OOMADJ_SERVICE_FOREGRD:
-		ret = proc_set_oom_score_adj(pid, OOMADJ_SERVICE_DEFAULT);
+	case OOMADJ_PREVIOUS_FOREGRD:
+		ret = proc_set_oom_score_adj(pid, OOMADJ_PREVIOUS_DEFAULT);
 		break;
 	default:
 		if (oom_score_adj > OOMADJ_BACKGRD_UNLOCKED) {
@@ -504,57 +467,4 @@ int proc_set_inactive(int pid, int oom_score_adj)
 
 	}
 	return ret;
-}
-
-void proc_set_group(pid_t onwerpid, pid_t childpid)
-{
-	int oom_score_adj = 0;
-	struct proc_process_info_t *process_info =
-		find_process_info(NULL, onwerpid, NULL);
-
-	if (proc_get_oom_score_adj(onwerpid, &oom_score_adj) < 0) {
-		_D("owner pid(%d) was already terminated", onwerpid);
-		return;
-	}
-	if (process_info) {
-		proc_add_pid_list(process_info, childpid, RESOURCED_APP_TYPE_GROUP);
-		proc_set_oom_score_adj(childpid, oom_score_adj);
-	}
-}
-
-pid_t find_pid_from_cmdline(char *cmdline)
-{
-	pid_t pid = -1, foundpid = -1;
-	int ret = 0;
-	DIR *dp;
-	struct dirent dentry;
-	struct dirent *result;
-	char appname[PROC_NAME_MAX];
-
-	dp = opendir("/proc");
-	if (!dp) {
-		_E("BACKGRD MANAGE : fail to open /proc");
-		return RESOURCED_ERROR_FAIL;
-	}
-	while (!(ret = readdir_r(dp, &dentry, &result)) && result != NULL) {
-		if (!isdigit(dentry.d_name[0]))
-			continue;
-
-		pid = atoi(dentry.d_name);
-		if (!pid)
-			continue;
-		ret = proc_get_cmdline(pid, appname);
-		if (ret == RESOURCED_ERROR_NONE) {
-			if (!strcmp(cmdline, appname)) {
-				foundpid = pid;
-				break;
-			}
-		}
-	}
-	closedir(dp);
-	if (ret) {
-		_E("BACKGRD MANAGE : readdir_r call on /proc directory failed");
-		return RESOURCED_ERROR_FAIL;
-	}
-	return foundpid;
 }

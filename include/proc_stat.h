@@ -230,6 +230,14 @@ enum proc_cgroup_cmd_type { /** cgroup command type **/
 	PROC_CGROUP_SET_NOTI_REQUEST,
 	PROC_CGROUP_SET_PROC_EXCLUDE_REQUEST,
 	PROC_CGROUP_GET_MEMSWEEP,
+	PROC_CGROUP_SET_TERMINATED,
+	PROC_CGROUP_SET_SYSTEM_SERVICE,
+	PROC_CGROUP_GET_CMDLINE,
+	PROC_CGROUP_GET_EXE,
+	PROC_CGROUP_GET_STAT,
+	PROC_CGROUP_GET_STATUS,
+	PROC_CGROUP_GET_OOMSCORE,
+	PROC_CGROUP_GET_PGID_CMDLINE,
 };
 
 
@@ -263,6 +271,17 @@ resourced_ret_c proc_group_change_status(int type, pid_t pid, char* app_id);
  */
 resourced_ret_c proc_cgroup_launch(int type, pid_t pid, char* app_id, char* pkg_id);
 
+/**
+ * @brief get proc filesystem component
+ *
+ * @return return get proc filesystem on success , -1 on false
+ * @param type component of proc filesystem
+ * @param pid process id
+ * @param buf data buffer
+ * @param len read length
+ *
+ */
+resourced_ret_c proc_stat_get_pid_entry(int type, pid_t pid, char* buf, int len);
 
 /**
  * @brief sweep memory about background processes

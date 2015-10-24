@@ -38,14 +38,15 @@
 #include <unistd.h>
 
 #include "const.h"
-#include "iface.h"
 #include "database.h"
 #include "datausage-quota-processing.h"
+#include "db-guard.h"
+#include "iface.h"
 #include "macro.h"
-#include "protocol-info.h"
-#include "storage.h"
 #include "specific-trace.h"
+#include "storage.h"
 #include "trace.h"
+#include "telephony.h"
 
 static sqlite3_stmt *update_statistics_query;
 static sqlite3_stmt *update_iface_query;
@@ -54,13 +55,15 @@ enum { read_until_null = -1 };
 
 static void handle_on_iface(const int ifindex, resourced_option_state state)
 {
-	_D("Handling network interface %d, %d", ifindex, state);
-
+	resourced_iface_type iftype;
 	if (!update_iface_query) {
 		_E("Uninitialized statement");
 		return;
 	}
-	sqlite3_bind_int(update_iface_query, 1, get_iftype(ifindex));
+	iftype = get_iftype(ifindex);
+	_D("Handling network interface ifindex:%d, state: %d, iftype: %d",
+			ifindex, state, iftype);
+	sqlite3_bind_int(update_iface_query, 1, iftype);
 	sqlite3_bind_int(update_iface_query, 2, state);
 
 	if (sqlite3_step(update_iface_query) != SQLITE_DONE)
@@ -90,8 +93,9 @@ static int init_update_statistics_query(sqlite3 *db)
 	rc = sqlite3_prepare_v2(db,
 			       "insert into statistics "		\
 			       "(binpath, received, sent, time_stamp, "	\
-			       "iftype, is_roaming, hw_net_protocol_type, ifname) " \
-			       "values (?, ?, ?, ?, ?, ?, ?, ?)",
+			       "iftype, is_roaming, hw_net_protocol_type, " \
+			       "ifname, imsi, ground) " \
+			       "values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 			       read_until_null, &update_statistics_query, NULL);
 
 	if (rc != SQLITE_OK) {
@@ -128,7 +132,7 @@ static gboolean store_application_stat(gpointer key, gpointer value,
 	struct classid_iftype_key *stat_key = (struct classid_iftype_key *)key;
 	time_t *last_touch_time = (time_t *)userdata;
 	resourced_hw_net_protocol_type hw_net_protocol_type =
-		get_hw_net_protocol_type(stat_key->iftype);
+		get_current_protocol(stat_key->iftype);
 
 	if (!update_statistics_query) {
 		_E("Uninitialized statement");
@@ -174,6 +178,18 @@ static gboolean store_application_stat(gpointer key, gpointer value,
 		_SE("Can not bind ifname: %s", stat_key->ifname);
 		return FALSE;
 	}
+	if (sqlite3_bind_text(update_statistics_query, 9,
+			      get_imsi_hash(stat_key->imsi), read_until_null,
+			SQLITE_STATIC) != SQLITE_OK) {
+		_SE("Can not bind imsi: %s", stat_key->imsi);
+		return FALSE;
+	}
+	if (sqlite3_bind_int(update_statistics_query, 10,
+			     (int)stat->ground) != SQLITE_OK) {
+		_E("Can not bind applicaton background type: %d",
+				(int)stat->ground);
+		return FALSE;
+	}
 
 	/*we want to reuse tree*/
 	stat->rcv_count = 0;
@@ -185,37 +201,35 @@ static gboolean store_application_stat(gpointer key, gpointer value,
 	return FALSE;
 }
 
-int store_result(struct application_stat_tree *stats, int flush_period)
+resourced_ret_c store_result(struct application_stat_tree *stats)
 {
 	time_t current_time;
 
-	time(&current_time);
+	pthread_rwlock_rdlock(&stats->guard);
+	WALK_TREE(stats->tree, print_appstat);
+	pthread_rwlock_unlock(&stats->guard);
 
-	if (current_time - stats->last_touch_time >= flush_period) {
-
-		pthread_rwlock_rdlock(&stats->guard);
-		WALK_TREE(stats->tree, print_appstat);
-		pthread_rwlock_unlock(&stats->guard);
-
-		if (init_update_statistics_query(resourced_get_database()) != SQLITE_OK) {
-			_D("Failed to initialize data usage quota statements: %s\n",
-			   sqlite3_errmsg(resourced_get_database()));
-			return 0; /* Do not iterate and free results */
-		}
-
-		/* it's reader only, we don't modify tree, don't reduce it,
-		 *		due we want to reuse it in next iteration */
-		pthread_rwlock_rdlock(&stats->guard);
-		g_tree_foreach((GTree *) stats->tree,
-			       store_application_stat,
-			       &stats->last_touch_time);
-		pthread_rwlock_unlock(&stats->guard);
-		flush_quota_table();
-		time(&current_time);
-		stats->last_touch_time = current_time;
-		return 1;
+	if (init_update_statistics_query(resourced_get_database()) != SQLITE_OK) {
+		_D("Failed to initialize data usage quota statements: %s\n",
+		   sqlite3_errmsg(resourced_get_database()));
+		return RESOURCED_ERROR_FAIL; /* Do not iterate and free results */
 	}
-	return 0;
+
+	time(&current_time);
+	stats->last_touch_time = current_time;
+
+	/* it's reader only, we don't modify tree, don't reduce it,
+	 *		due we want to reuse it in next iteration */
+	pthread_rwlock_rdlock(&stats->guard);
+	g_tree_foreach((GTree *) stats->tree,
+		       store_application_stat,
+		       &stats->last_touch_time);
+
+	pthread_rwlock_unlock(&stats->guard);
+	flush_quota_table();
+	change_db_entries_num_num(g_tree_nnodes((GTree *)stats->tree));
+
+	return RESOURCED_ERROR_NONE;
 }
 
 void finalize_storage_stm(void)

@@ -26,6 +26,7 @@
  *
  */
 
+#include <Eina.h>
 #include "trace.h"
 #include "edbus-handler.h"
 #include "macro.h"
@@ -35,14 +36,20 @@
 
 struct edbus_list{
 	char *signal_name;
+	char *signal_path;
+
 	E_DBus_Signal_Handler *handler;
 };
 
 static struct edbus_object edbus_objects[] = {
 	{ RESOURCED_PATH_SWAP, RESOURCED_INTERFACE_SWAP   , NULL, NULL },
+	{ RESOURCED_PATH_FREEZER, RESOURCED_INTERFACE_FREEZER, NULL, NULL },
 	{ RESOURCED_PATH_OOM, RESOURCED_INTERFACE_OOM, NULL, NULL },
 	{ RESOURCED_PATH_PROCESS, RESOURCED_INTERFACE_PROCESS, NULL, NULL },
+	{ RESOURCED_PATH_LOGGING, RESOURCED_INTERFACE_LOGGING, NULL, NULL },
 	{ RESOURCED_PATH_NETWORK, RESOURCED_INTERFACE_NETWORK, NULL, NULL },
+	{ RESOURCED_PATH_SLUGGISH, RESOURCED_INTERFACE_SLUGGISH, NULL, NULL },
+	{ RESOURCED_PATH_DBUS,    RESOURCED_INTERFACE_DBUS,    NULL, NULL },
 	/* Add new object & interface here*/
 };
 
@@ -66,6 +73,11 @@ static int append_variant(DBusMessageIter *iter,
 
 	for (ch = (char*)sig, i = 0; *ch != '\0'; ++i, ++ch) {
 		switch (*ch) {
+		case 'b':
+			int_type = atoi(param[i]);
+			dbus_message_iter_append_basic(iter,
+				DBUS_TYPE_BOOLEAN, &int_type);
+			break;
 		case 'i':
 			int_type = atoi(param[i]);
 			dbus_message_iter_append_basic(iter,
@@ -159,10 +171,6 @@ DBusMessage *dbus_method_sync(const char *dest, const char *path,
 
 	reply = dbus_connection_send_with_reply_and_block(conn, msg,
 			DBUS_REPLY_TIMEOUT, &err);
-	if (!reply) {
-		_E("dbus_connection_send error(No reply)");
-	}
-
 	if (dbus_error_is_set(&err)) {
 		_E("dbus_connection_send error(%s:%s)", err.name, err.message);
 		dbus_error_free(&err);
@@ -329,19 +337,20 @@ static void unregister_edbus_signal_handle(void)
 }
 
 int register_edbus_signal_handler(const char *path, const char *interface,
-		const char *name, E_DBus_Signal_Cb cb)
+		const char *name, E_DBus_Signal_Cb cb, void *user_data)
 {
 	Eina_List *search;
 	struct edbus_list *entry;
 	E_DBus_Signal_Handler *handler;
 
 	EINA_LIST_FOREACH(edbus_handler_list, search, entry) {
-		if (entry != NULL && strncmp(entry->signal_name, name, strlen(name)) == 0)
+		if (entry != NULL && strncmp(entry->signal_name, name, strlen(name)) == 0 &&
+			strncmp(entry->signal_path, path, strlen(path)) == 0)
 			return RESOURCED_ERROR_FAIL;
 	}
 
 	handler = e_dbus_signal_handler_add(edbus_conn, NULL, path,
-				interface, name, cb, NULL);
+				interface, name, cb, user_data);
 
 	if (!handler) {
 		_E("fail to add edbus handler");
@@ -359,19 +368,34 @@ int register_edbus_signal_handler(const char *path, const char *interface,
 
 	if (!entry->signal_name) {
 		_E("Malloc failed");
-		free(entry);
-		return -1;
+		goto release_entry;
+	}
+
+	entry->signal_path = strndup(path, strlen(path)+1);
+	if (!entry->signal_path) {
+		_E("Malloc failed");
+		goto release_name;
 	}
 
 	entry->handler = handler;
 	edbus_handler_list = eina_list_prepend(edbus_handler_list, entry);
 	if (!edbus_handler_list) {
 		_E("eina_list_prepend failed");
-		free(entry->signal_name);
-		free(entry);
-		return RESOURCED_ERROR_FAIL;
+		goto release_path;
 	}
+
 	return RESOURCED_ERROR_NONE;
+
+release_path:
+	free(entry->signal_path);
+
+release_name:
+	free(entry->signal_name);
+
+release_entry:
+
+	free(entry);
+	return RESOURCED_ERROR_FAIL;
 }
 
 int broadcast_edbus_signal_str(const char *path, const char *interface,
@@ -461,6 +485,9 @@ resourced_ret_c edbus_add_methods(const char *path,
 	}
 
 	for (i = 0; i < size; i++) {
+		if (!edbus_methods[i].member || !edbus_methods[i].func)
+			continue;
+
 		ret = e_dbus_interface_method_add(iface,
 				    edbus_methods[i].member,
 				    edbus_methods[i].signature,
@@ -471,6 +498,43 @@ resourced_ret_c edbus_add_methods(const char *path,
 				edbus_methods[i].member);
 			return RESOURCED_ERROR_FAIL;
 		}
+	}
+
+	return RESOURCED_ERROR_NONE;
+}
+
+resourced_ret_c edbus_add_signals(
+		       const struct edbus_signal *const edbus_signals,
+		       const size_t size)
+{
+	int i;
+	int ret;
+
+	for (i = 0; i < size; i++) {
+		ret = register_edbus_signal_handler(
+				    edbus_signals[i].path,
+				    edbus_signals[i].interface,
+				    edbus_signals[i].name,
+				    edbus_signals[i].func,
+				    edbus_signals[i].user_data);
+		if (ret) {
+			_E("Fail to add signal %s, %s!\n",
+				edbus_signals[i].path, edbus_signals[i].name);
+			return RESOURCED_ERROR_FAIL;
+		}
+	}
+
+	return RESOURCED_ERROR_NONE;
+}
+
+resourced_ret_c edbus_message_send(DBusMessage *msg)
+{
+	DBusPendingCall *pending;
+
+	pending = e_dbus_message_send(edbus_conn, msg, NULL, -1, NULL);
+	if (!pending) {
+		_E("sending message over dbus failed, connection disconnected!");
+		return RESOURCED_ERROR_FAIL;
 	}
 
 	return RESOURCED_ERROR_NONE;
@@ -496,6 +560,50 @@ static void request_name_cb(void *data, DBusMessage *msg, DBusError *error)
 	}
 
 	_I("Request Name reply : %d", val);
+}
+
+int check_dbus_active(void)
+{
+	int ret = FALSE;
+	DBusError err;
+	DBusMessage *msg;
+	DBusMessageIter iter, sub;
+	const char *state;
+	char *pa[2];
+
+	pa[0] = "org.freedesktop.systemd1.Unit";
+	pa[1] = "ActiveState";
+
+	_I("%s %s", pa[0], pa[1]);
+
+	msg = dbus_method_sync("org.freedesktop.systemd1",
+			"/org/freedesktop/systemd1/unit/default_2etarget",
+			"org.freedesktop.DBus.Properties",
+			"Get", "ss", pa);
+	if (!msg)
+		return -EBADMSG;
+
+	dbus_error_init(&err);
+
+	if (!dbus_message_iter_init(msg, &iter) ||
+	    dbus_message_iter_get_arg_type(&iter) != DBUS_TYPE_VARIANT)
+		goto out;
+
+	dbus_message_iter_recurse(&iter, &sub);
+
+	if (dbus_message_iter_get_arg_type(&sub) != DBUS_TYPE_STRING) {
+		ret = -EBADMSG;
+		goto out;
+	}
+
+	dbus_message_iter_get_basic(&sub, &state);
+
+	if (strncmp(state, "active", 6) == 0)
+		ret = TRUE;
+out:
+	dbus_message_unref(msg);
+	dbus_error_free(&err);
+	return ret;
 }
 
 void edbus_init(void)
@@ -560,4 +668,9 @@ void edbus_exit(void)
 	unregister_edbus_signal_handle();
 	e_dbus_connection_close(edbus_conn);
 	e_dbus_shutdown();
+}
+
+E_DBus_Connection *get_resourced_edbus_connection(void)
+{
+	return edbus_conn;
 }

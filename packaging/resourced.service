@@ -1,18 +1,12 @@
 [Unit]
 Description=Resource management daemon
-After=tizen-system.target
-Wants=tizen-system.target
+After=wm_ready.service
 
 [Service]
 Type=notify
 EnvironmentFile=/run/tizen-mobile-env
-Environment="CGROUP_MEMORY_SWAP=/sys/fs/cgroup/memory/swap"
-Environment="SWAPFILE=/dev/zram0"
-ExecStartPre=-/bin/mkdir -pm 755 $CGROUP_MEMORY_SWAP
-ExecStartPre=-/bin/sh -c "/bin/echo 3 > $CGROUP_MEMORY_SWAP/memory.move_charge_at_immigrate"
-ExecStart=/usr/bin/resourced -s 1 -u 20 -c swapon
-ExecStopPost=-/sbin/swapoff $SWAPFILE
-Restart=always
+ExecStart=/usr/bin/resourced
+Restart=on-failure
 RestartSec=0
 
 [Install]

@@ -1,3 +1,12 @@
-resourced com.samsung.setting::private r
-resourced system::vconf_inhouse rw
 resourced system-apps r
+resourced sys-assert::core rwxat
+resourced system::media rwxat
+resourced system::media::root rwxat
+resourced system::sys_logging rwxat
+resourced telephony_framework::api_network r
+resourced telephony_framework::api_manager r
+resourced telephony_framework::api_modem r
+resourced telephony_framework::api_sim r
+resourced telephony_framework::properties rw
+resourced tizen::vconf::public::r::platform::rw rw
+resourced tizen::vconf::network r

@@ -26,25 +26,20 @@
 #define __MODULE_DATA_HANDLE_H__
 
 #include "counter.h"
-#include "daemon-options.h"
 #include "init.h"
-#include "proc-main.h"
-
-struct modules_arg {
-	struct daemon_opts *opts;
-};
 
 struct swap_module_data {
-	int swaptype;			/* swap */
+	int swap_state;			/* swap SWAP_ON/SWAP_OFF */
 };
 
 struct shared_modules_data {
 	struct counter_arg *carg;
+	struct daemon_arg *darg;
 	struct swap_module_data swap_data;
 };
 
 struct shared_modules_data *get_shared_modules_data(void);
 
-void init_modules_arg(struct modules_arg *marg, struct daemon_arg *darg);
+void init_modules_arg(struct daemon_arg *darg);
 
 #endif /* __MODULE_DATA_HANDLE_H__ */

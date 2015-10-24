@@ -4,54 +4,69 @@ CMAKE_MINIMUM_REQUIRED (VERSION 2.6)
 # libresourced uses it
 PROJECT(resource_d)
 
+MACRO(INSTALL_SYMLINK _filepath _sympath)
+  GET_FILENAME_COMPONENT(_symname ${_sympath} NAME)
+  GET_FILENAME_COMPONENT(_installdir ${_sympath} PATH)
+
+  EXECUTE_PROCESS(COMMAND "${CMAKE_COMMAND}" -E create_symlink
+    ${_filepath}
+    ${CMAKE_CURRENT_BINARY_DIR}/${_symname})
+  INSTALL(FILES ${CMAKE_CURRENT_BINARY_DIR}/${_symname}
+    DESTINATION ${_installdir})
+ENDMACRO(INSTALL_SYMLINK)
+
 SET(CMAKE_EXTRA_INCLUDE_FILES unistd.h)
 
 INCLUDE_DIRECTORIES(${RESOURCED_INCLUDEDIR}
   ${RESOURCED_SOURCE_DIR}
-  ${LOGGING_SOURCE_DIR}/include
+  ${HEART_SOURCE_DIR}/include
   ${MEMORY_SOURCE_DIR}
   ${PROC-STAT_SOURCE_DIR}/include
   ${APP-STAT_SOURCE_DIR}/include
-  ${NETWORK_SOURCE_DIR}/include)
+  ${NETWORK_SOURCE_DIR}/include
+  ${BLOCK_SOURCE_DIR}/include
+  ${RESOURCED_DBUS_SOURCE_DIR}/include
+  ${FREEZER_SOURCE_DIR}/include
+)
 
 SET (HEADERS
   ${NETWORK_SOURCE_DIR}/include/datausage-vconf-callbacks.h
   ${NETWORK_SOURCE_DIR}/include/iface-cb.h
-  ${INCLUDE_COMMON_DIR}/config.h
-  ${INCLUDE_COMMON_DIR}/config-parser.h
-  ${INCLUDE_COMMON_DIR}/const.h
-  ${INCLUDE_COMMON_DIR}/daemon-options.h
-  ${INCLUDE_COMMON_DIR}/macro.h
-  ${INCLUDE_COMMON_DIR}/logging-common.h
-  ${INCLUDE_COMMON_DIR}/lowmem-common.h
-  ${INCLUDE_COMMON_DIR}/module-data.h
-  ${INCLUDE_COMMON_DIR}/module.h
-  ${INCLUDE_COMMON_DIR}/swap-common.h
+  ${INCLUDE_MEMORY_DIR}/helper.h
 )
+FILE(GLOB FILE "${INCLUDE_COMMON_DIR}/*.h")
+FOREACH(HEADER ${FILE})
+	SET(HEADERS ${HEADERS} ${HEADER})
+ENDFOREACH()
 
 SET (SOURCES
-  ${COMMON_SOURCE_DIR}/cgroup.c
-  ${COMMON_SOURCE_DIR}/notifier.c
-  ${COMMON_SOURCE_DIR}/appid-helper.c
-  ${COMMON_SOURCE_DIR}/config-parser.c
-  ${COMMON_SOURCE_DIR}/edbus-handler.c
-  ${COMMON_SOURCE_DIR}/file-helper.c
-  ${COMMON_SOURCE_DIR}/module-data.c
-  ${COMMON_SOURCE_DIR}/module.c
-  ${NETWORK_SOURCE_DIR}/counter.c
   ${PROC-STAT_SOURCE_DIR}/proc-handler.c
   ${PROC-STAT_SOURCE_DIR}/proc-main.c
   ${PROC-STAT_SOURCE_DIR}/proc-noti.c
   ${PROC-STAT_SOURCE_DIR}/proc-process.c
   ${PROC-STAT_SOURCE_DIR}/proc-monitor.c
+  ${PROC-STAT_SOURCE_DIR}/proc-info.c
+  ${PROC-STAT_SOURCE_DIR}/proc-appusage.c
+  ${PROC-STAT_SOURCE_DIR}/proc-usage-stats.c
+  ${PROC-STAT_SOURCE_DIR}/proc-usage-stats-helper.c
+  ${SLUGGISH_SOURCE_DIR}/sluggish.c
   ${RESOURCED_SOURCE_DIR}/init.c
   ${RESOURCED_SOURCE_DIR}/main.c
+  ${MEMORY_SOURCE_DIR}/helper.c
+  ${COMMON_SOURCE_DIR}/procfs.c
   )
+
+FILE(GLOB FILE "${COMMON_SOURCE_DIR}/*.c")
+FOREACH(SOURCE ${FILE})
+	SET(SOURCES ${SOURCES} ${SOURCE})
+ENDFOREACH()
 
 INSTALL(FILES ${DATA_DIR}/${EXCLUDE_LIST_FILE_NAME} DESTINATION /usr/etc)
 #network module
 IF("${NETWORK_MODULE}" STREQUAL "ON")
-
+  SET(SOURCES ${SOURCES}
+    ${NETWORK_SOURCE_DIR}/counter.c
+  )
   IF("${DATAUSAGE_TYPE}" STREQUAL "NFACCT")
     SET(CONFIG_DATAUSAGE_NFACCT 1)
     SET(SOURCES ${SOURCES}
@@ -62,12 +77,23 @@ IF("${NETWORK_MODULE}" STREQUAL "ON")
     SET(SOURCES ${SOURCES}
       ${NETWORK_SOURCE_DIR}/generic-netlink.c
       ${NETWORK_SOURCE_DIR}/ktgrabber-restriction.c
+      ${NETWORK_SOURCE_DIR}/ktgrabber-parser.c
+    )
+  ENDIF()
+
+  IF("${WEARABLE_NOTI}" STREQUAL "ON")
+    SET(SOURCES ${SOURCES}
+      ${NETWORK_SOURCE_DIR}/notification-wearable.c
+    )
+  ELSE()
+    SET(SOURCES ${SOURCES}
+      ${NETWORK_SOURCE_DIR}/notification-mobile.c
     )
   ENDIF()
 
   SET(SOURCES ${SOURCES}
     ${NETWORK_SOURCE_DIR}/counter-process.c
-    ${NETWORK_SOURCE_DIR}/daemon-options.c
+    ${NETWORK_SOURCE_DIR}/options-private.c
     ${NETWORK_SOURCE_DIR}/datausage-quota-processing.c
     ${NETWORK_SOURCE_DIR}/datausage-vconf-callbacks.c
     ${NETWORK_SOURCE_DIR}/datausage-vconf-common.c
@@ -75,21 +101,38 @@ IF("${NETWORK_MODULE}" STREQUAL "ON")
     ${NETWORK_SOURCE_DIR}/datausage-common.c
     ${NETWORK_SOURCE_DIR}/iface-cb.c
     ${NETWORK_SOURCE_DIR}/nl-helper.c
-    ${NETWORK_SOURCE_DIR}/notification.c
     ${NETWORK_SOURCE_DIR}/restriction-handler.c
     ${NETWORK_SOURCE_DIR}/restriction-helper.c
     ${NETWORK_SOURCE_DIR}/restriction-local.c
     ${NETWORK_SOURCE_DIR}/tethering-restriction.c
+    ${NETWORK_SOURCE_DIR}/db-guard.c
     )
-
-   IF ("${TETHERING_FEATURE}" STREQUAL "ON")
-	SET(TETHERING_FEATURE 1)
-   ENDIF()
 
    INSTALL(FILES ${NETWORK_SOURCE_DIR}/network.conf
 		DESTINATION /etc/resourced)
+   INSTALL(FILES ${NETWORK_SOURCE_DIR}/500.resourced-datausage.patch.sh
+                 DESTINATION /etc/opt/upgrade)
+
+   SET (REQUIRES_LIST ${REQUIRES_LIST}
+	openssl
+	tapi
+   )
+
 
 ENDIF()
+
+
+#freezer module
+IF("${FREEZER_MODULE}" STREQUAL "ON")
+   SET(SOURCES ${SOURCES} ${FREEZER_SOURCE_DIR}/freezer.c)
+ELSE()
+   SET(SOURCES ${SOURCES} ${FREEZER_SOURCE_DIR}/freezer-common.c)
+ENDIF()
+
+#resourced DBus module
+SET(SOURCES ${SOURCES}
+  ${RESOURCED_DBUS_SOURCE_DIR}/resourced-dbus.c
+  )
 
 IF("${VIP_AGENT}" STREQUAL "ON")
   SET(SOURCES ${SOURCES}
@@ -97,40 +140,29 @@ IF("${VIP_AGENT}" STREQUAL "ON")
     )
 ENDIF()
 
-#logging module
-IF("${LOGGING_MODULE}" STREQUAL "ON")
+#heart module
+IF("${HEART_MODULE}" STREQUAL "ON")
   SET(SOURCES ${SOURCES}
-    ${LOGGING_SOURCE_DIR}/logging.c
+    ${HEART_SOURCE_DIR}/logging.c
+    ${HEART_SOURCE_DIR}/heart.c
+    ${HEART_SOURCE_DIR}/heart-abnormal.c
+    ${HEART_SOURCE_DIR}/heart-cpu.c
+    ${HEART_SOURCE_DIR}/heart-memory.c
+    ${HEART_SOURCE_DIR}/heart-battery.c
+    ${HEART_SOURCE_DIR}/heart-storage.c
+    ${HEART_SOURCE_DIR}/decision.c
+    ${HEART_SOURCE_DIR}/decision-memory.c
     )
-  ADD_DEFINITIONS("-DLOGGING_SUPPORT")
-#logging memory
-  IF("${LOGGING_MEMORY}" STREQUAL "ON")
-    SET(SOURCES ${SOURCES}
-      ${MEMORY_SOURCE_DIR}/logging-memory.c
-      )
-  ENDIF()
-#logging cpu
-  IF("${LOGGING_CPU}" STREQUAL "ON")
-    SET(SOURCES ${SOURCES}
-      ${CPU_SOURCE_DIR}/logging-cpu.c
-      )
-  ENDIF()
+  ADD_DEFINITIONS("-DHEART_SUPPORT")
 ENDIF()
 
 #memory module
 IF("${MEMORY_MODULE}" STREQUAL "ON")
   SET(SOURCES ${SOURCES}
     ${MEMORY_SOURCE_DIR}/lowmem-dbus.c
-  )
-  IF("${MEMORY_CGROUP}" STREQUAL "ON")
-    SET(SOURCES ${SOURCES}
-      ${MEMORY_SOURCE_DIR}/vmpressure-lowmem-handler.c
+    ${MEMORY_SOURCE_DIR}/memcontrol.c
+    ${MEMORY_SOURCE_DIR}/vmpressure-lowmem-handler.c
     )
-  ELSE()
-    SET(SOURCES ${SOURCES}
-      ${MEMORY_SOURCE_DIR}/lowmem-handler.c
-    )
-  ENDIF()
   ADD_DEFINITIONS("-DMEMORY_SUPPORT")
 ENDIF()
 
@@ -154,6 +186,13 @@ IF("${TIMER_SLACK}" STREQUAL "ON")
     )
 ENDIF()
 
+IF("${BLOCK_MODULE}" STREQUAL "ON")
+  SET(SOURCES ${SOURCES}
+     ${BLOCK_SOURCE_DIR}/block.c
+     ${BLOCK_SOURCE_DIR}/block-monitor.c
+    )
+ENDIF()
+
 SET (REQUIRES_LIST ${REQUIRES_LIST}
 	ecore
 	dlog
@@ -162,13 +201,14 @@ SET (REQUIRES_LIST ${REQUIRES_LIST}
 	vconf
 	vconf-internal-keys
 	ecore-file
-	eina
 	edbus
+	eina
 	libsystemd-daemon
-	journal
+	leveldb
+	eventsystem
 )
 
-IF("${LOGGING_MODULE}" STREQUAL "ON")
+IF("${HEART_MODULE}" STREQUAL "ON")
   SET (REQUIRES_LIST ${REQUIRES_LIST}
 	libsystemd-journal
   )
@@ -181,7 +221,7 @@ FOREACH(flag ${daemon_pkgs_CFLAGS})
         SET(EXTRA_CFLAGS "${EXTRA_CFLAGS} ${flag} -pthread")
 ENDFOREACH(flag)
 
-SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${EXTRA_CFLAGS}")
+SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${EXTRA_CFLAGS} -fPIE")
 
 CONFIGURE_FILE(${INCLUDE_COMMON_DIR}/config.h.in
   ${INCLUDE_COMMON_DIR}/config.h)
@@ -189,17 +229,9 @@ CONFIGURE_FILE(${INCLUDE_COMMON_DIR}/config.h.in
 ADD_EXECUTABLE(hashtest ${UTILS_SOURCE_DIR}/hashtest.c)
 TARGET_LINK_LIBRARIES(hashtest ${daemon_pkgs_LDFLAGS})
 
-ADD_EXECUTABLE(cgroup-test ${UTILS_SOURCE_DIR}/cgroup-test.c
-	${COMMON_SOURCE_DIR}/cgroup.c
-	${COMMON_SOURCE_DIR}/file-helper.c
-	${COMMON_SOURCE_DIR}/appid-helper.c
-	${NETWORK_SOURCE_DIR}/net-cls-cgroup.c
-	)
-TARGET_LINK_LIBRARIES(cgroup-test ${daemon_pkgs_LDFLAGS} "-L/lib/ -lrt")
-
 ADD_EXECUTABLE (${PROJECT_NAME} ${HEADERS} ${SOURCES})
 TARGET_LINK_LIBRARIES(${PROJECT_NAME}
-  ${daemon_pkgs_LDFLAGS}
+  ${daemon_pkgs_LDFLAGS} "-pie -lrt -lm -ldl"
 )
 
 IF("${NETWORK_MODULE}" STREQUAL "ON")
@@ -209,7 +241,7 @@ IF("${NETWORK_MODULE}" STREQUAL "ON")
     storage
     settings
     net-cls
-    roaming
+    telephony
     net-iface
   )
 
@@ -241,7 +273,14 @@ ELSE()
 ENDIF()
 
 IF("${SWAP_MODULE}" STREQUAL "ON")
-	INSTALL(PROGRAMS ${CMAKE_BINARY_DIR}/scripts/resourced-zram.sh DESTINATION bin)
+  INSTALL(FILES ${SWAP_SOURCE_DIR}/swap.conf DESTINATION /etc/resourced)
+ENDIF()
+
+IF("${HEART_MODULE}" STREQUAL "ON")
+  INSTALL(FILES ${HEART_SOURCE_DIR}/heart.conf
+    DESTINATION /etc/resourced RENAME heart.conf)
+  INSTALL(FILES ${HEART_SOURCE_DIR}/dump_heart_data.sh
+    DESTINATION /opt/etc/dump.d/module.d)
 ENDIF()
 
 IF("${CPU_MODULE}" STREQUAL "ON")
@@ -262,3 +301,40 @@ TARGET_LINK_LIBRARIES(vip-release-agent dlog)
 INSTALL(TARGETS vip-release-agent DESTINATION /usr/bin)
 INSTALL(FILES ${VIP_SOURCE_DIR}/vip-process.conf DESTINATION /etc/resourced RENAME vip-process.conf)
 ENDIF()
+
+IF("${BLOCK_MODULE}" STREQUAL "ON")
+  INSTALL(FILES ${BLOCK_SOURCE_DIR}/block.conf
+    DESTINATION /etc/resourced RENAME block.conf)
+ENDIF()
+
+IF("${FREEZER_MODULE}" STREQUAL "ON")
+  INSTALL(FILES ${FREEZER_SOURCE_DIR}/freezer.conf
+    DESTINATION /etc/resourced RENAME freezer.conf)
+  INSTALL(FILES ${FREEZER_SOURCE_DIR}/libsystem-freezer.so.${ARCH} DESTINATION lib
+    RENAME libsystem-freezer.so)
+ENDIF()
+
+INSTALL(FILES ${PROC-STAT_SOURCE_DIR}/proc.conf
+    DESTINATION /etc/resourced RENAME proc.conf)
+
+IF("${SLP_TESTS}" STREQUAL "ON")
+ADD_EXECUTABLE(test-file-helper ${HEADERS}
+  ${COMMON_SOURCE_DIR}/file-helper.c
+  ${COMMON_SOURCE_DIR}/file-helper.h
+  ${TEST_DIR}/test-file-helper.c)
+TARGET_LINK_LIBRARIES(test-file-helper ${daemon_pkgs_LDFLAGS})
+INSTALL(TARGETS test-file-helper DESTINATION /usr/lib/resourced/test)
+ENDIF()
+
+ADD_EXECUTABLE(mem-stress ${HEADERS}
+  ${COMMON_SOURCE_DIR}/macro.h
+  ${COMMON_SOURCE_DIR}/util.c
+  ${COMMON_SOURCE_DIR}/util.h
+  ${COMMON_SOURCE_DIR}/config-parser.c
+  ${COMMON_SOURCE_DIR}/config-parser.h
+  ${CMAKE_SOURCE_DIR}/src/mem-stress/mem-stress.c)
+TARGET_LINK_LIBRARIES(mem-stress ${daemon_pkgs_LDFLAGS})
+INSTALL(TARGETS mem-stress DESTINATION ${MAKE_INSTALL_PREFIX}/usr/bin)
+INSTALL(FILES ${CMAKE_SOURCE_DIR}/src/mem-stress/mem-stress.service
+  DESTINATION ${MAKE_INSTALL_PREFIX}/usr/lib/systemd/system)
+INSTALL_SYMLINK(../mem-stress.service ${MAKE_INSTALL_PREFIX}/usr/lib/systemd/system/graphical.target.wants/mem-stress.service)

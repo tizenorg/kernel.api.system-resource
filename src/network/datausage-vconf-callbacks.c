@@ -25,7 +25,6 @@
 
 #include "const.h"
 #include "counter.h"
-#include "daemon-options.h"
 #include "datausage-vconf-callbacks.h"
 #include "datausage-quota-processing.h"
 #include "datausage-quota.h"
@@ -34,6 +33,8 @@
 #include "resourced.h"
 #include "settings.h"
 #include "trace.h"
+#include "telephony.h"
+#include "notification.h"
 
 #include <stdlib.h>
 #include <vconf.h>
@@ -59,6 +60,8 @@ static void datacall_change_cb(keynode_t *key, void *data)
 
 static void datacall_logging_change_cb(keynode_t *key, void *data)
 {
+/* TODO introduce set_datacall_logging */
+#if 0
 	struct daemon_opts *options = (struct daemon_opts *)data;
 	int val = vconf_keynode_get_bool(key);
 
@@ -70,11 +73,12 @@ static void datacall_logging_change_cb(keynode_t *key, void *data)
 	    vconf_keynode_get_name(key), val);
 	options->datacall_logging = val ? RESOURCED_OPTION_ENABLE :
 		RESOURCED_OPTION_DISABLE;
+#endif
 }
 
 static void datausage_timer_change_cb(keynode_t *key, void *data)
 {
-	struct daemon_opts *options = (struct daemon_opts *)data;
+	struct net_counter_opts *options = (struct net_counter_opts *)data;
 	int val = vconf_keynode_get_int(key);
 
 	if (!options) {
@@ -85,6 +89,16 @@ static void datausage_timer_change_cb(keynode_t *key, void *data)
 	    vconf_keynode_get_name(key), val);
 
 	options->update_period = val;
+}
+
+static void datausage_sim_change_cb(keynode_t *key, void *data)
+{
+	int val = vconf_keynode_get_int(key);
+
+	_SD("key = %s, value = %d(int)\n",
+	    vconf_keynode_get_name(key), val);
+
+	check_and_clear_all_noti();
 }
 
 void resourced_add_vconf_datausage_cb(struct counter_arg *carg)
@@ -101,6 +115,9 @@ void resourced_add_vconf_datausage_cb(struct counter_arg *carg)
 	vconf_notify_key_changed(RESOURCED_DATACALL_LOGGING_PATH,
 				 datacall_logging_change_cb,
 				 (void *)carg->opts);
+	vconf_notify_key_changed(VCONF_TELEPHONY_DEFAULT_DATA_SERVICE,
+				 datausage_sim_change_cb,
+				 NULL);
 }
 
 void resourced_remove_vconf_datausage_cb(void)
@@ -113,4 +130,6 @@ void resourced_remove_vconf_datausage_cb(void)
 				 datausage_timer_change_cb);
 	vconf_ignore_key_changed(RESOURCED_DATACALL_LOGGING_PATH,
 				 datacall_logging_change_cb);
+	vconf_ignore_key_changed(VCONF_TELEPHONY_DEFAULT_DATA_SERVICE,
+				 datausage_sim_change_cb);
 }

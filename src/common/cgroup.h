@@ -27,7 +27,8 @@
 #ifndef _CGROUP_LIBRARY_CGROUP_H_
 #define _CGROUP_LIBRARY_CGROUP_H_
 
-#define DEFAULT_CGROUP	  	"/sys/fs/cgroup"
+#define DEFAULT_CGROUP       "/sys/fs/cgroup"
+#define PROC_TASK_CHILDREN   "/proc/%d/task/%d/children"
 
 /**
  * @desc Get one unsigned int value from cgroup
@@ -56,17 +57,17 @@ int cgroup_write_node(const char *cgroup_name,  const char *file_name, unsigned 
  * @return negative value if error
  */
 int cgroup_write_node_str(const char *cgroup_name,
-		const char *file_name, char* string);
+		const char *file_name, const char *string);
 
 /**
  * @desc make cgroup,
  * @param parentdir - parent cgroup path
  * @param cgroup_name - cgroup subdirectory to write
- * @param cgroup_exists - 1 if subdir already exists, NULL pointer is possible
+ * @param already - true if subdir already exists, NULL pointer is possible
  * as formal argument, in this case it will not be filled
  * @return negative value if error
  */
-int make_cgroup_subdir(char* parentdir, char* cgroup_name, int *cgroup_exists);
+int make_cgroup_subdir(const char* parentdir, const char* cgroup_name, bool *already);
 
 /**
  * @desc mount cgroup,
@@ -78,10 +79,9 @@ int make_cgroup_subdir(char* parentdir, char* cgroup_name, int *cgroup_exists);
 int mount_cgroup_subsystem(char* source, char* mount_point, char* opts);
 
 /**
- * @desc mount cgroup,
- * @param source -cgroup name
- * @param mount_point - cgroup path
- * @param opts - mount options
+ * @desc write pid into cgroup_subsystem/cgroup_name file,
+ * @param cgroup_subsystem path to /sys/fs/cgroup/subsystem
+ * @param cgroup_name - name in /sys/fs/cgroup/subsystem/
  * @return negative value if error
  */
 resourced_ret_c place_pid_to_cgroup(const char *cgroup_subsystem,
@@ -89,5 +89,22 @@ resourced_ret_c place_pid_to_cgroup(const char *cgroup_subsystem,
 
 resourced_ret_c place_pid_to_cgroup_by_fullpath(const char *cgroup_full_path,
 	const int pid);
+
+/**
+ * @desc doing the same as @see place_pid_to_cgroup,
+ * but also put into cgroup first level child processes
+ */
+resourced_ret_c place_pidtree_to_cgroup(const char *cgroup_subsystem,
+	const char *cgroup_name, const int pid);
+
+/**
+ * @desc this function sets release agent path into cgroup subsystem
+ * and enables this mechanism
+ * @param cgroup_sussys - cgroup subsystem name, it's relative path to cgroup,
+ * relativelly default cgroup path (DEFAULT_CGROUP)
+ * @param release_agent full path to release agent executable
+ * @return negative value if error
+ */
+int set_release_agent(const char *cgroup_subsys, const char *release_agent);
 
 #endif /*_CGROUP_LIBRARY_CGROUP_H_*/

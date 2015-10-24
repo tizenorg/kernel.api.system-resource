@@ -33,7 +33,7 @@
 #include "settings.h"
 #include "trace.h"
 
-API int load_options(resourced_options *options)
+API int load_vconf_net_options(resourced_net_options *options)
 {
 	int val = 0;
 
@@ -54,13 +54,6 @@ API int load_options(resourced_options *options)
 			RESOURCED_OPTION_ENABLE : RESOURCED_OPTION_DISABLE;
 	else {
 		_D("Can not get DataCall settings");
-		return -1;
-	}
-
-	if (vconf_get_int(RESOURCED_DATAUSAGE_TIMER_PATH, &val) == 0)
-		options->datausage_timer = val;
-	else {
-		_D("Can not get DataUsage timer settings");
 		return -1;
 	}
 

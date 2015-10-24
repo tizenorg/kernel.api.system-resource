@@ -84,7 +84,7 @@ static resourced_ret_c send_quota_message(const char *interface,
 static resourced_ret_c send_create_quota_message(const char *app_id,
 	const data_usage_quota *quota)
 {
-	char *params[10];
+	char *params[11];
 	char snd_quota[MAX_DEC_SIZE(int64_t)], rcv_quota[MAX_DEC_SIZE(int64_t)];
 
 	snprintf(snd_quota, sizeof(snd_quota), "%" PRId64 "", quota->snd_quota);
@@ -93,20 +93,21 @@ static resourced_ret_c send_create_quota_message(const char *app_id,
 	serialize_params(params, ARRAY_SIZE(params), app_id, quota->time_period,
 		snd_quota, rcv_quota, quota->snd_warning_threshold,
 		quota->rcv_warning_threshold, quota->quota_type, quota->iftype,
-		*quota->start_time, quota->roaming_type);
-	return send_quota_message(RESOURCED_NETWORK_CREATE_QUOTA, "sdttdddddd",
+		*quota->start_time, quota->roaming_type, quota->imsi);
+	return send_quota_message(RESOURCED_NETWORK_CREATE_QUOTA, "sdttdddddds",
 		params);
 }
 
 static resourced_ret_c send_remove_quota_message(const char *app_id,
 	const resourced_iface_type iftype,
-	const resourced_roaming_type roaming_type)
+	const resourced_roaming_type roaming_type,
+	const char *imsi, const resourced_state_t ground)
 {
-	char *params[3];
+	char *params[5];
 
 	serialize_params(params, ARRAY_SIZE(params), app_id, iftype,
-		roaming_type);
-	return send_quota_message(RESOURCED_NETWORK_REMOVE_QUOTA, "sdd",
+		roaming_type, imsi, ground);
+	return send_quota_message(RESOURCED_NETWORK_REMOVE_QUOTA, "sddsd",
 		params);
 }
 
@@ -125,7 +126,7 @@ API resourced_ret_c remove_datausage_quota(
 		return RESOURCED_ERROR_INVALID_PARAMETER;
 
 	return send_remove_quota_message(rule->app_id, rule->iftype,
-	         rule->roaming);
+	         rule->roaming, rule->imsi ? rule->imsi : "", rule->quota_type);
 }
 
 API resourced_ret_c remove_datausage_quota_by_iftype(
@@ -193,7 +194,14 @@ API resourced_ret_c set_datausage_quota(const char *app_id,
 	_SD("quota.rcv_quota = %lld", quota->rcv_quota);
 	_SD("quota.quota_type = %d", quota->quota_type);
 	_SD("quota.iftype = %d", quota->iftype);
+	_SD("quota->imsi = %s", quota->imsi);
+	_SD("quota->roaming_type = %d", quota->roaming_type);
+	_SD("quota->snd_warning_threshold = %d", quota->snd_warning_threshold);
+	_SD("quota->rcv_warning_threshold = %d", quota->rcv_warning_threshold);
 	_SD("===============================");
 
+	/* replace imsi to empty string if NULL was given*/
+	if (!quota_to_send.imsi)
+		quota_to_send.imsi = "";
 	return send_create_quota_message(app_id, &quota_to_send);
 }

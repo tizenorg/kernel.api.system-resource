@@ -31,6 +31,10 @@
 
 #include <sys/types.h>
 
+#ifndef __cplusplus
+#include <stdbool.h>
+#endif /* !__cplusplus */
+
 #ifdef __cplusplus
 extern "C" {
 #endif /* __cplusplus */

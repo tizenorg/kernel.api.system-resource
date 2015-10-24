@@ -1,4 +1,5 @@
 /*
+
  * resourced
  *
  * Copyright (c) 2000 - 2013 Samsung Electronics Co., Ltd. All rights reserved.
@@ -36,68 +37,34 @@
 #include "trace.h"
 #include "edbus-handler.h"
 #include "proc-process.h"
+#include "procfs.h"
 #include "lowmem-handler.h"
 #include "notifier.h"
-
-#include <journal/system.h>
+#include "init.h"
+#include "module.h"
 
 #define WATCHDOG_LAUNCHING_PARAM "WatchdogPopupLaunch"
 #define WATCHDOG_KEY1			"_SYSPOPUP_CONTENT_"
 #define WATCHDOG_KEY2			"_APP_NAME_"
 #define WATCHDOG_VALUE_1			"watchdog"
 
-#define SIGNAL_PROC_WATCHDOG_RESULT	"WatchdogResult"
-#define SIGNAL_PROC_ACTIVE   		"Active"
-#define SIGNAL_PROC_EXCLUDE	  	"ProcExclude"
-#define SIGNAL_PROC_PRELAUNCH	  	"ProcPrelaunch"
-#define SIGNAL_PROC_STATUS	  	"ProcStatus"
-#define SIGNAL_PROC_SWEEP	  	"ProcSweep"
-#define SIGNAL_PROC_WATCHDOG	  	"ProcWatchdog"
-#define SIGNAL_PROC_GROUP	  	"ProcGroup"
-#define TIZEN_DEBUG_MODE_FILE   "/opt/etc/.debugmode"
-
+#define TIZEN_DEBUG_MODE_FILE		"/opt/etc/.debugmode"
 
 #define INIT_PID	1
 #define INIT_PROC_VAL	-1
 
 static int proc_watchdog_state;
-static int proc_dbus_proc_state;
 int current_lcd_state;
 
-static Ecore_Timer *watchdog_check_timer = NULL;
+static Ecore_Timer *watchdog_check_timer;
 #define WATCHDOG_TIMER_INTERVAL		90
-
-/*
- * Callback function executed by edbus 'Signal' method call. Extracts
- * process pid and signal type from message body and uses it to send a specific
- * signal to the process.
- */
-static DBusMessage *edbus_signal_trigger(E_DBus_Object *obj, DBusMessage *msg);
 
 static struct proc_watchdog_info {
 	pid_t pid;
 	int signum;
 } proc_watchdog = { -1, -1 };
 
-/*
- * Adds function callbacks to edbus interface.
- */
-static resourced_ret_c proc_dbus_init(void);
-
-static const struct edbus_method edbus_methods[] = {
-	{ "Signal", "ii", NULL, edbus_signal_trigger },
-	/* Add methods here */
-};
-
-enum proc_status_type { /** cgroup command type **/
-	PROC_STATUS_LAUNCH,
-	PROC_STATUS_RESUME,
-	PROC_STATUS_TERMINATE,
-	PROC_STATUS_FOREGRD,
-	PROC_STATUS_BACKGRD,
-};
-
-static int check_debugenable(void)
+int proc_debug_enabled(void)
 {
 	if (access(TIZEN_DEBUG_MODE_FILE, F_OK) == 0)
 		return 1;
@@ -113,6 +80,66 @@ void proc_set_watchdog_state(int state)
 static int proc_get_watchdog_state(void)
 {
 	return proc_watchdog_state;
+}
+
+static DBusMessage *edbus_get_meminfo(E_DBus_Object *obj, DBusMessage *msg)
+{
+	unsigned int mem_total, mem_free, mem_available, cached, used;
+	unsigned int swap_total, swap_free, swap;
+	DBusMessageIter iter;
+	DBusMessage *reply;
+	int r;
+
+	reply = dbus_message_new_method_return(msg);
+
+	r = proc_get_meminfo("MemTotal", &mem_total);
+	if (r < 0) {
+		_E("cannot get MemTotal from /proc/meminfo");
+		goto finish;
+	}
+
+	r = proc_get_meminfo("MemFree", &mem_free);
+	if (r < 0) {
+		_E("cannot get MemFree from /proc/meminfo");
+		goto finish;
+	}
+
+	r = proc_get_meminfo("Cached", &cached);
+	if (r < 0) {
+		_E("cannot get Cached from /proc/meminfo");
+		goto finish;
+	}
+
+	r = proc_get_meminfo("MemAvailable", &mem_available);
+	if (r < 0)
+		mem_available = mem_free + cached;
+
+	r = proc_get_meminfo("SwapTotal", &swap_total);
+	if (r < 0) {
+		_E("cannot get SwapTotal from /proc/meminfo");
+		goto finish;
+	}
+
+	r = proc_get_meminfo("SwapFree", &swap_free);
+	if (r < 0) {
+		_E("cannot get SwapFree from /proc/meminfo");
+		goto finish;
+	}
+
+	used = mem_total - mem_available;
+	swap = swap_total - swap_free;
+
+	_D("get memory info total = %u, free = %u, cache = %u, used = %u, swap = %u",
+		mem_total, mem_free, cached, used, swap);
+	dbus_message_iter_init_append(reply, &iter);
+	dbus_message_iter_append_basic(&iter, DBUS_TYPE_UINT32, &mem_total);
+	dbus_message_iter_append_basic(&iter, DBUS_TYPE_UINT32, &mem_free);
+	dbus_message_iter_append_basic(&iter, DBUS_TYPE_UINT32, &cached);
+	dbus_message_iter_append_basic(&iter, DBUS_TYPE_UINT32, &used);
+	dbus_message_iter_append_basic(&iter, DBUS_TYPE_UINT32, &swap);
+
+finish:
+	return reply;
 }
 
 static void proc_dbus_active_signal_handler(void *data, DBusMessage *msg)
@@ -141,62 +168,285 @@ static void proc_dbus_active_signal_handler(void *data, DBusMessage *msg)
 		type = PROC_CGROUP_SET_INACTIVE;
 	else
 		return;
-	resourced_proc_status_change(type, pid, NULL, NULL);
+	resourced_proc_status_change(type, pid, NULL, NULL, PROC_TYPE_NONE);
 }
 
-int proc_get_dbus_proc_state(void)
+static DBusMessage *edbus_get_app_cpu(E_DBus_Object *obj, DBusMessage *msg)
 {
-	return proc_dbus_proc_state;
+	int ret;
+	DBusMessageIter iter;
+	DBusMessage *reply;
+	char *appid;
+	unsigned long total, utime, stime;
+	struct proc_app_info *pai = NULL;
+
+	ret = dbus_message_get_args(msg, NULL, DBUS_TYPE_STRING, &appid,
+			DBUS_TYPE_INVALID);
+	if (!ret) {
+		_E("Wrong message arguments!");
+		reply = dbus_message_new_method_return(msg);
+		return reply;
+	}
+
+	pai = find_app_info_by_appid(appid);
+	if (!pai) {
+		_E("There is no appid %s", appid);
+		reply = dbus_message_new_method_return(msg);
+		return reply;
+	}
+
+	if (proc_get_cpu_time(pai->main_pid, &utime, &stime) != RESOURCED_ERROR_NONE) {
+		_E("proc_get_cpu_time = %s (%d)", appid, pai->main_pid);
+		reply = dbus_message_new_method_return(msg);
+		return reply;
+	}
+	_D("get cpu usage for %s (%d), utime = %u, stime = %u",
+			appid, pai->main_pid, utime, stime);
+	total = utime + stime;
+	reply = dbus_message_new_method_return(msg);
+	dbus_message_iter_init_append(reply, &iter);
+	dbus_message_iter_append_basic(&iter, DBUS_TYPE_UINT32, &total);
+
+	return reply;
 }
 
-static void proc_set_dbus_proc_state(int state)
+static DBusMessage *edbus_get_app_memory(E_DBus_Object *obj, DBusMessage *msg)
 {
-	proc_dbus_proc_state = state;
+	int ret;
+	DBusMessageIter iter;
+	DBusMessage *reply;
+	char *appid;
+	unsigned int rss;
+	struct proc_app_info *pai = NULL;
+
+	ret = dbus_message_get_args(msg, NULL, DBUS_TYPE_STRING, &appid,
+		DBUS_TYPE_INVALID);
+	if (!ret) {
+		_E("Wrong message arguments!");
+		reply = dbus_message_new_method_return(msg);
+		return reply;
+	}
+
+	pai = find_app_info_by_appid(appid);
+	if (!pai || !pai->main_pid) {
+		_E("There is no appid %s", appid);
+		reply = dbus_message_new_method_return(msg);
+		return reply;
+	}
+
+	if (proc_get_mem_usage(pai->main_pid, NULL, &rss) < 0) {
+		_E("lowmem_get_proc_mem_usage failed for appid = %s (%d)",
+			appid, pai->main_pid);
+		reply = dbus_message_new_method_return(msg);
+		return reply;
+	}
+
+	_D("get memory usage for %s (%d), rss = %u", appid, pai->main_pid, rss);
+	reply = dbus_message_new_method_return(msg);
+	dbus_message_iter_init_append(reply, &iter);
+	dbus_message_iter_append_basic(&iter, DBUS_TYPE_UINT32, &rss);
+
+	return reply;
 }
 
-static void proc_dbus_proc_signal_handler(void *data, DBusMessage *msg)
+static DBusMessage *edbus_get_memory_list(E_DBus_Object *obj, DBusMessage *msg)
 {
-	DBusError err;
-	int ret, type, convert = 0;
-	pid_t pid;
+	DBusMessageIter iter;
+	DBusMessageIter arr;
+	DBusMessage *reply;
+	GSList *giter;
+	char *appid;
+	struct proc_app_info *pai;
+	unsigned int total = 0, rss;
 
-	ret = dbus_message_is_signal(msg, RESOURCED_INTERFACE_PROCESS, SIGNAL_PROC_STATUS);
-	if (ret == 0) {
-		_D("there is no active signal");
-		return;
+	reply = dbus_message_new_method_return(msg);
+	gslist_for_each_item(giter, proc_app_list) {
+		pai = (struct proc_app_info *)giter->data;
+		if (!pai->main_pid)
+			continue;
+		if (proc_get_mem_usage(pai->main_pid, NULL, &rss) < 0)
+			continue;
+		total += rss;
 	}
 
-	dbus_error_init(&err);
+	dbus_message_iter_init_append(reply, &iter);
+	dbus_message_iter_open_container(&iter, DBUS_TYPE_ARRAY, "(su)", &arr);
+	gslist_for_each_item(giter, proc_app_list) {
+		DBusMessageIter sub;
+		pai = (struct proc_app_info *)giter->data;
+		if (!pai || !pai->main_pid)
+			continue;
+		if (proc_get_mem_usage(pai->main_pid, NULL, &rss) < 0)
+			continue;
 
-	if (dbus_message_get_args(msg, &err, DBUS_TYPE_INT32, &type, DBUS_TYPE_INT32, &pid, DBUS_TYPE_INVALID) == 0) {
-		_D("there is no message");
-		return;
+		appid = pai->appid;
+		dbus_message_iter_open_container(&arr, DBUS_TYPE_STRUCT, NULL, &sub);
+		dbus_message_iter_append_basic(&sub, DBUS_TYPE_STRING, &appid);
+		dbus_message_iter_append_basic(&sub, DBUS_TYPE_UINT32, &rss);
+		dbus_message_iter_close_container(&arr, &sub);
+	}
+	dbus_message_iter_close_container(&iter, &arr);
+	return reply;
+}
+
+static DBusMessage *edbus_get_cpu_list(E_DBus_Object *obj, DBusMessage *msg)
+{
+	DBusMessageIter iter;
+	DBusMessageIter arr;
+	DBusMessage *reply;
+	GSList *giter;
+	char *appid;
+	struct proc_app_info *pai;
+	unsigned long total, utime, stime;
+
+	total = 0;
+	reply = dbus_message_new_method_return(msg);
+	gslist_for_each_item(giter, proc_app_list) {
+		pai = (struct proc_app_info *)giter->data;
+		if (!pai->main_pid)
+			continue;
+		if (proc_get_cpu_time(pai->main_pid, &utime, &stime) != RESOURCED_ERROR_NONE) {
+			continue;
+		}
+		total += utime;
+		total += stime;
 	}
 
-	if (!proc_dbus_proc_state)
-		proc_set_dbus_proc_state(PROC_DBUS_ENABLE);
-
-	switch (type) {
-	case PROC_STATUS_LAUNCH:
-		convert = PROC_CGROUP_SET_LAUNCH_REQUEST;
-		break;
-	case PROC_STATUS_RESUME:
-		convert = PROC_CGROUP_SET_RESUME_REQUEST;
-		break;
-	case PROC_STATUS_TERMINATE:
-		convert = PROC_CGROUP_SET_TERMINATE_REQUEST;
-		break;
-	case PROC_STATUS_FOREGRD:
-		convert = PROC_CGROUP_SET_FOREGRD;
-		break;
-	case PROC_STATUS_BACKGRD:
-		convert = PROC_CGROUP_SET_BACKGRD;
-		break;
-	default:
-		return;
+	dbus_message_iter_init_append(reply, &iter);
+	dbus_message_iter_open_container(&iter, DBUS_TYPE_ARRAY, "(su)", &arr);
+	gslist_for_each_item(giter, proc_app_list) {
+		DBusMessageIter sub;
+		unsigned long percent;
+		pai = (struct proc_app_info *)giter->data;
+		if (!pai->main_pid)
+			continue;
+		if (proc_get_cpu_time(pai->main_pid, &utime, &stime) != RESOURCED_ERROR_NONE) {
+			continue;
+		}
+		appid = pai->appid;
+		dbus_message_iter_open_container(&arr, DBUS_TYPE_STRUCT, NULL, &sub);
+		dbus_message_iter_append_basic(&sub, DBUS_TYPE_STRING, &appid);
+		percent = (!total) ? 0 : ((((utime + stime) * 1000)/total + 5) / 10);
+		dbus_message_iter_append_basic(&sub, DBUS_TYPE_UINT32, &percent);
+		dbus_message_iter_close_container(&arr, &sub);
 	}
-	_D("call proc_dbus_proc_signal_handler : pid = %d, type = %d", pid, convert);
-	resourced_proc_status_change(convert, pid, NULL, NULL);
+	dbus_message_iter_close_container(&iter, &arr);
+	return reply;
+}
+
+static DBusMessage *edbus_get_memory_lists(E_DBus_Object *obj, DBusMessage *msg)
+{
+	DBusMessageIter iter;
+	DBusMessageIter arr;
+	DBusMessage *reply;
+	GSList *giter;
+	char *appid;
+	int type, ret;
+	struct proc_app_info *pai;
+	unsigned int total = 0, rss;
+
+	ret = dbus_message_get_args(msg, NULL, DBUS_TYPE_INT32, &type,
+			DBUS_TYPE_INVALID);
+	if (!ret) {
+		_E("Wrong message arguments!");
+		reply = dbus_message_new_method_return(msg);
+		return reply;
+	}
+
+	reply = dbus_message_new_method_return(msg);
+	gslist_for_each_item(giter, proc_app_list) {
+		pai = (struct proc_app_info *)giter->data;
+		if (!pai->main_pid)
+			continue;
+		if (type != PROC_TYPE_MAX && pai->type != type)
+			continue;
+		if (proc_get_mem_usage(pai->main_pid, NULL, &rss) < 0)
+			continue;
+		total += rss;
+	}
+
+	dbus_message_iter_init_append(reply, &iter);
+	dbus_message_iter_open_container(&iter, DBUS_TYPE_ARRAY, "(su)", &arr);
+	gslist_for_each_item(giter, proc_app_list) {
+		DBusMessageIter sub;
+		pai = (struct proc_app_info *)giter->data;
+		if (!pai || !pai->main_pid)
+			continue;
+		if (type != PROC_TYPE_MAX && pai->type != type)
+			continue;
+		if (proc_get_mem_usage(pai->main_pid, NULL, &rss) < 0)
+			continue;
+
+		appid = pai->appid;
+		dbus_message_iter_open_container(&arr, DBUS_TYPE_STRUCT, NULL, &sub);
+		dbus_message_iter_append_basic(&sub, DBUS_TYPE_STRING, &appid);
+		dbus_message_iter_append_basic(&sub, DBUS_TYPE_UINT32, &rss);
+		dbus_message_iter_close_container(&arr, &sub);
+	}
+	dbus_message_iter_close_container(&iter, &arr);
+	return reply;
+}
+
+static DBusMessage *edbus_get_cpu_lists(E_DBus_Object *obj, DBusMessage *msg)
+{
+	DBusMessageIter iter;
+	DBusMessageIter arr;
+	DBusMessage *reply;
+	GSList *giter;
+	int ret, type;
+	char *appid;
+	struct proc_app_info *pai;
+	unsigned long total, utime, stime;
+
+	total = 0;
+
+	ret = dbus_message_get_args(msg, NULL, DBUS_TYPE_INT32, &type,
+			DBUS_TYPE_INVALID);
+	if (!ret) {
+		_E("Wrong message arguments!");
+		reply = dbus_message_new_method_return(msg);
+		return reply;
+	}
+
+	reply = dbus_message_new_method_return(msg);
+	gslist_for_each_item(giter, proc_app_list) {
+		pai = (struct proc_app_info *)giter->data;
+		if (!pai->main_pid)
+			continue;
+		if (type != PROC_TYPE_MAX && pai->type != type)
+			continue;
+		if (proc_get_cpu_time(pai->main_pid, &utime, &stime) != RESOURCED_ERROR_NONE) {
+			continue;
+		}
+		total += utime;
+		total += stime;
+	}
+
+	dbus_message_iter_init_append(reply, &iter);
+	dbus_message_iter_open_container(&iter, DBUS_TYPE_ARRAY, "(su)", &arr);
+	gslist_for_each_item(giter, proc_app_list) {
+		DBusMessageIter sub;
+		unsigned long percent;
+		pai = (struct proc_app_info *)giter->data;
+		if (!pai->main_pid)
+			continue;
+		if (type != PROC_TYPE_MAX && pai->type != type)
+			continue;
+		if (proc_get_cpu_time(pai->main_pid, &utime, &stime) != RESOURCED_ERROR_NONE) {
+			continue;
+		}
+		appid = pai->appid;
+		dbus_message_iter_open_container(&arr, DBUS_TYPE_STRUCT, NULL, &sub);
+		dbus_message_iter_append_basic(&sub, DBUS_TYPE_STRING, &appid);
+		if (total == 0)
+			percent = 0;
+		else
+			percent = (((utime + stime) * 1000)/total + 5) / 10;
+		dbus_message_iter_append_basic(&sub, DBUS_TYPE_UINT32, &percent);
+		dbus_message_iter_close_container(&arr, &sub);
+	}
+	dbus_message_iter_close_container(&iter, &arr);
+	return reply;
 }
 
 static void proc_dbus_exclude_signal_handler(void *data, DBusMessage *msg)
@@ -205,6 +455,8 @@ static void proc_dbus_exclude_signal_handler(void *data, DBusMessage *msg)
 	int ret;
 	char *str;
 	pid_t pid;
+	struct proc_exclude pe;
+	int len;
 
 	ret = dbus_message_is_signal(msg, RESOURCED_INTERFACE_PROCESS, SIGNAL_PROC_EXCLUDE);
 	if (ret == 0) {
@@ -220,11 +472,31 @@ static void proc_dbus_exclude_signal_handler(void *data, DBusMessage *msg)
 	}
 
 	_D("call proc_dbus_exclude_signal_handler : pid = %d, str = %s", pid, str);
-	if (!strcmp(str, "exclude"))
-		proc_set_runtime_exclude_list(pid, PROC_EXCLUDE);
-	else if (!strcmp(str, "include"))
-		proc_set_runtime_exclude_list(pid, PROC_INCLUDE);
-	else
+
+	/*
+	 * allowed strings: wakeup, exclude, include
+	 */
+	len = strlen(str);
+
+	if (len == 6 && !strncmp(str, "wa", 2)) {
+		struct proc_status ps = {0};
+
+		ps.pai = find_app_info(pid);
+		ps.pid = pid;
+		resourced_notify(RESOURCED_NOTIFIER_APP_WAKEUP, &ps);
+	} else if (len == 7) {
+		if(!strncmp(str, "ex", 2)) {
+			pe.pid = pid;
+			pe.type = PROC_EXCLUDE;
+			resourced_notify(RESOURCED_NOTIFIER_CONTROL_EXCLUDE, &pe);
+			proc_set_runtime_exclude_list(pe.pid, pe.type);
+		} else if (!strncmp(str, "in", 2)) {
+			pe.pid = pid;
+			pe.type = PROC_INCLUDE;
+			resourced_notify(RESOURCED_NOTIFIER_CONTROL_EXCLUDE, &pe);
+			proc_set_runtime_exclude_list(pe.pid, pe.type);
+		}
+	} else
 		return;
 }
 
@@ -235,6 +507,8 @@ static void proc_dbus_prelaunch_signal_handler(void *data, DBusMessage *msg)
 	char *appid;
 	char *pkgid;
 	int flags;
+	struct proc_status ps;
+	struct proc_app_info *pai;
 
 	ret = dbus_message_is_signal(msg, RESOURCED_INTERFACE_PROCESS,
 		SIGNAL_PROC_PRELAUNCH);
@@ -256,10 +530,18 @@ static void proc_dbus_prelaunch_signal_handler(void *data, DBusMessage *msg)
 	_D("call proc_dbus_prelaunch_handler: appid = %s, pkgid = %s, flags = %d",
 		appid, pkgid, flags);
 
-	if (flags & PROC_LARGE_HEAP) {
-		proc_set_apptype(appid, pkgid, PROC_LARGE_HEAP);
-		lowmem_dynamic_process_killer(DYNAMIC_KILL_LARGEHEAP);
+	pai = proc_create_app_list(appid, pkgid);
+	if (!pai) {
+		_E("Failed to create app list");
+		return;
 	}
+
+	pai->flags = flags;
+	pai->type = PROC_TYPE_READY;
+	ps.appid = appid;
+	ps.pai = pai;
+	resourced_notify(RESOURCED_NOTIFIER_APP_PRELAUNCH, &ps);
+	lowmem_proactive_oom_killer(flags, appid);
 }
 
 static void proc_dbus_sweep_signal_handler(void *data, DBusMessage *msg)
@@ -305,14 +587,16 @@ static void proc_dbus_watchdog_result(void *data, DBusMessage *msg)
 
 	if (type == 1) {
 		if (proc_watchdog.signum == SIGTERM || proc_watchdog.signum == SIGKILL) {
+			resourced_proc_status_change(PROC_CGROUP_SET_TERMINATE_REQUEST,
+				    proc_watchdog.pid, NULL, NULL, PROC_TYPE_NONE);
 			kill(proc_watchdog.pid, SIGABRT);
 			if (watchdog_check_timer == NULL) {
 				watchdog_check_timer =
 					ecore_timer_add(WATCHDOG_TIMER_INTERVAL, check_watchdog_cb, (void *)NULL);
 			}
-		}
-		else
+		} else {
 			_E("ERROR: Unsupported signal type!");
+		}
 	}
 	proc_watchdog.pid = -1;
 	proc_watchdog.signum = -1;
@@ -365,6 +649,7 @@ static void proc_dbus_watchdog_handler(void *data, DBusMessage *msg)
 	DBusError err;
 	int pid, command, ret;
 	char appname[PROC_NAME_MAX];
+	struct proc_status ps;
 
 	if (dbus_message_is_signal(msg, RESOURCED_INTERFACE_PROCESS, SIGNAL_PROC_WATCHDOG) == 0) {
 		_D("there is no watchdog result signal");
@@ -401,52 +686,80 @@ static void proc_dbus_watchdog_handler(void *data, DBusMessage *msg)
 	}
 
 	_E("Receive watchdog signal to pid: %d(%s)\n", pid, appname);
-	journal_system_anr(appname);
+	ps.pai = find_app_info(pid);
+	ps.pid = pid;
+	resourced_notify(RESOURCED_NOTIFIER_APP_ANR, &ps);
+
 	if (watchdog_check_timer) {
 		_E("current killing watchdog process. so skipped kill %d(%s)\n", pid, appname);
 		return;
 	}
 
-	if (check_debugenable()) {
-		_E("just kill watchdog process when debug enabled pid: %d(%s)\n", pid, appname);
-		kill(pid, SIGABRT);
-		if (watchdog_check_timer == NULL) {
-			watchdog_check_timer =
-				ecore_timer_add(WATCHDOG_TIMER_INTERVAL, check_watchdog_cb, (void *)NULL);
-	}
-	}
-	else {
-		ret = proc_dbus_show_popup(appname);
-		if (ret < 0)
-			_E("ERROR : request_to_launch_by_dbus()failed : %d", ret);
-		else {
-			proc_watchdog.pid = pid;
-			proc_watchdog.signum = command;
-		}
+	_E("just kill watchdog process when debug enabled pid: %d(%s)\n", pid, appname);
+	resourced_proc_status_change(PROC_CGROUP_SET_TERMINATE_REQUEST,
+	    pid, NULL, NULL, PROC_TYPE_NONE);
+	kill(pid, SIGABRT);
+	if (watchdog_check_timer == NULL) {
+		watchdog_check_timer =
+		    ecore_timer_add(WATCHDOG_TIMER_INTERVAL, check_watchdog_cb, (void *)NULL);
 	}
 }
 
-static void proc_dbus_grouping_handler(void *data, DBusMessage *msg)
+static void send_dump_signal(char *signal)
+{
+	pid_t pid = getpid();
+
+	broadcast_edbus_signal(DUMP_SERVICE_OBJECT_PATH,
+	    DUMP_SERVICE_INTERFACE_NAME, signal, DBUS_TYPE_INT32, &pid);
+}
+
+static void proc_dbus_dump_handler(void *data, DBusMessage *msg)
 {
 	DBusError err;
-	int pid, childpid, ret;
+	dbus_bool_t ret;
+	char *path;
+	int mode;
 
-	if (dbus_message_is_signal(msg, RESOURCED_INTERFACE_PROCESS, SIGNAL_PROC_GROUP) == 0) {
-		_D("there is no watchdog result signal");
+	if (dbus_message_is_signal(msg, DUMP_SERVICE_INTERFACE_NAME, SIGNAL_DUMP) == 0) {
+		_D("there is no process group signal");
 		return;
 	}
 
 	dbus_error_init(&err);
 
-	ret = dbus_message_get_args(msg, NULL, DBUS_TYPE_INT32, &pid, DBUS_TYPE_INT32,
-		&childpid, DBUS_TYPE_INVALID);
-
+	ret = dbus_message_get_args(msg, &err, DBUS_TYPE_INT32, &mode,
+		    DBUS_TYPE_STRING, &path, DBUS_TYPE_INVALID);
 	if (ret == 0) {
 		_D("there is no message");
 		return;
 	}
+	_D("received dump request : path %s", path);
+	send_dump_signal(SIGNAL_DUMP_START);
+	resourced_proc_dump(mode, path);
+	send_dump_signal(SIGNAL_DUMP_FINISH);
+}
 
-	proc_set_group(pid, childpid);
+static void proc_dbus_systemservice_handler(void *data, DBusMessage *msg)
+{
+	DBusError err;
+	dbus_bool_t ret;
+	pid_t pid;
+
+	if (dbus_message_is_signal(msg, RESOURCED_INTERFACE_PROCESS, SIGNAL_PROC_SYSTEMSERVICE) == 0) {
+		_D("there is no process group signal");
+		return;
+	}
+
+	dbus_error_init(&err);
+
+	ret = dbus_message_get_args(msg, &err, DBUS_TYPE_INT32, &pid,
+		    DBUS_TYPE_INVALID);
+	if (ret == 0) {
+		_D("there is no message");
+		return;
+	}
+	resourced_proc_status_change(PROC_CGROUP_SET_SYSTEM_SERVICE, pid,
+		    NULL, NULL, PROC_TYPE_NONE);
 }
 
 static DBusMessage *edbus_signal_trigger(E_DBus_Object *obj, DBusMessage *msg)
@@ -461,9 +774,9 @@ static DBusMessage *edbus_signal_trigger(E_DBus_Object *obj, DBusMessage *msg)
 
 	if (ret == TRUE) {
 		ret_val = proc_get_cmdline(pid, appname);
-		if (ret_val != RESOURCED_ERROR_NONE)
+		if (ret_val != RESOURCED_ERROR_NONE) {
 			_E("ERROR : invalid pid(%d)", pid);
-		else {
+		} else {
 			_E("Receive watchdog signal to pid: %d(%s)\n", pid, appname);
 			if (proc_get_watchdog_state() == PROC_WATCHDOG_ENABLE  &&  proc_watchdog.pid == -1) {
 				ret_val = resourced_proc_excluded(appname);
@@ -477,9 +790,10 @@ static DBusMessage *edbus_signal_trigger(E_DBus_Object *obj, DBusMessage *msg)
 					}
 				}
 			}
-		}	
-	} else
+		}
+	} else {
 		_E("ERROR: Wrong message arguments!");
+	}
 
 	reply = dbus_message_new_method_return(msg);
 	return reply;
@@ -490,7 +804,8 @@ static void proc_dbus_lcd_on(void *data, DBusMessage *msg)
 	DBusError err;
 	dbus_error_init(&err);
 
-	if (dbus_message_is_signal(msg, DEVICED_INTERFACE_DISPLAY, SIGNAL_LCD_ON) == 0) {
+	if (dbus_message_is_signal(msg, DEVICED_INTERFACE_DISPLAY,
+		    SIGNAL_DEVICED_LCDON) == 0) {
 		_D("there is no lcd on signal");
 		return;
 	}
@@ -505,7 +820,8 @@ static void proc_dbus_lcd_off(void *data, DBusMessage *msg)
 	DBusError err;
 
 	dbus_error_init(&err);
-	if (dbus_message_is_signal(msg, DEVICED_INTERFACE_DISPLAY, SIGNAL_LCD_OFF) == 0) {
+	if (dbus_message_is_signal(msg, DEVICED_INTERFACE_DISPLAY,
+		    SIGNAL_DEVICED_LCDOFF) == 0) {
 		_D("there is no lcd on signal");
 		return;
 	}
@@ -515,46 +831,358 @@ static void proc_dbus_lcd_off(void *data, DBusMessage *msg)
 	resourced_notify(RESOURCED_NOTIFIER_LCD_OFF, NULL);
 }
 
-
-static resourced_ret_c proc_dbus_init(void)
+static void booting_done_signal_handler(void *data, DBusMessage *msg)
 {
-	register_edbus_signal_handler(RESOURCED_PATH_PROCESS, RESOURCED_INTERFACE_PROCESS,
-			SIGNAL_PROC_WATCHDOG_RESULT,
-		    proc_dbus_watchdog_result);
+	DBusError err;
 
-	register_edbus_signal_handler(RESOURCED_PATH_PROCESS, RESOURCED_INTERFACE_PROCESS,
-			SIGNAL_PROC_ACTIVE,
-		    proc_dbus_active_signal_handler);
+	dbus_error_init(&err);
+	if (dbus_message_is_signal(msg, DEVICED_INTERFACE_CORE,
+		    SIGNAL_DEVICED_BOOTINGDONE) == 0) {
+		_D("there is no lcd on signal");
+		return;
+	}
 
-	register_edbus_signal_handler(RESOURCED_PATH_PROCESS, RESOURCED_INTERFACE_PROCESS,
-			SIGNAL_PROC_EXCLUDE,
-		    proc_dbus_exclude_signal_handler);
+	resourced_notify(RESOURCED_NOTIFIER_BOOTING_DONE, NULL);
+}
 
-	register_edbus_signal_handler(RESOURCED_PATH_PROCESS, RESOURCED_INTERFACE_PROCESS,
-			SIGNAL_PROC_PRELAUNCH,
-		    proc_dbus_prelaunch_signal_handler);
+static void early_booting_done_signal_handler(void *data, DBusMessage *msg)
+{
+	DBusError err;
 
-	register_edbus_signal_handler(RESOURCED_PATH_PROCESS, RESOURCED_INTERFACE_PROCESS,
-			SIGNAL_PROC_STATUS,
-		    proc_dbus_proc_signal_handler);
+	dbus_error_init(&err);
+	if (dbus_message_is_signal(msg, DEVICED_INTERFACE_CORE,
+		    SIGNAL_DEVICED_EARLY_BOOTING_DONE) == 0) {
+		_D("there is no lcd on signal");
+		return;
+	}
+	modules_late_init(NULL);
+}
 
-	register_edbus_signal_handler(RESOURCED_PATH_PROCESS, RESOURCED_INTERFACE_PROCESS,
-			SIGNAL_PROC_SWEEP,
-		    proc_dbus_sweep_signal_handler);
+static void low_battery_signal_handler(void *data, DBusMessage *msg)
+{
+	DBusError err;
 
-	register_edbus_signal_handler(RESOURCED_PATH_PROCESS, RESOURCED_INTERFACE_PROCESS,
-			SIGNAL_PROC_WATCHDOG,
-		    proc_dbus_watchdog_handler);
+	dbus_error_init(&err);
+	if (dbus_message_is_signal(msg, DEVICED_INTERFACE_BATTERY,
+		    SIGNAL_DEVICED_LOW_BATTERY) == 0) {
+		_D("there is no low battery signal");
+		return;
+	}
 
-	register_edbus_signal_handler(RESOURCED_PATH_PROCESS, RESOURCED_INTERFACE_PROCESS,
-			SIGNAL_PROC_WATCHDOG,
-		    proc_dbus_grouping_handler);
+	resourced_notify(RESOURCED_NOTIFIER_LOW_BATTERY, NULL);
+}
 
-	register_edbus_signal_handler(DEVICED_PATH_DISPLAY,
-		    DEVICED_INTERFACE_DISPLAY, SIGNAL_LCD_ON, proc_dbus_lcd_on);
+static void poweroff_signal_handler(void *data, DBusMessage *msg)
+{
+	DBusError err;
 
-	register_edbus_signal_handler(DEVICED_PATH_DISPLAY,
-		    DEVICED_INTERFACE_DISPLAY, SIGNAL_LCD_OFF, proc_dbus_lcd_off);
+	dbus_error_init(&err);
+	if (dbus_message_is_signal(msg, DEVICED_INTERFACE_POWEROFF,
+		    SIGNAL_DEVICED_POWEROFF_STATE) == 0) {
+		_D("there is no power off signal");
+		return;
+	}
+
+	proc_sweep_memory(PROC_SWEEP_EXCLUDE_ACTIVE, INIT_PID);
+	resourced_notify(RESOURCED_NOTIFIER_POWER_OFF, NULL);
+
+	_E("quit mainloop at poweroff");
+	resourced_quit_mainloop();
+}
+
+static void proc_dbus_aul_launch(void *data, DBusMessage *msg)
+{
+	DBusError err;
+	dbus_error_init(&err);
+	pid_t pid;
+	int status, apptype;
+	char *appid, *pkgid, *pkgtype;
+
+	if (dbus_message_is_signal(msg, AUL_APPSTATUS_INTERFACE_NAME,
+		    SIGNAL_AMD_LAUNCH) == 0) {
+		_D("there is no aul launch signal");
+		return;
+	}
+
+	if (dbus_message_get_args(msg, &err, DBUS_TYPE_INT32, &pid,
+		    DBUS_TYPE_STRING, &appid, DBUS_TYPE_STRING, &pkgid,
+		    DBUS_TYPE_STRING, &pkgtype, DBUS_TYPE_INVALID) == 0) {
+		_D("there is no message");
+		return;
+	}
+	dbus_error_free(&err);
+
+	if (!strncmp(pkgtype, "svc", 3)) {
+		apptype = PROC_TYPE_SERVICE;
+		status = PROC_CGROUP_SET_SERVICE_REQUEST;
+	} else if (!strncmp(pkgtype, "ui", 2)) {
+		apptype = PROC_TYPE_GUI;
+		status = PROC_CGROUP_SET_LAUNCH_REQUEST;
+	} else if (!strncmp(pkgtype, "widget", 6)) {
+		apptype = PROC_TYPE_WIDGET;
+		status = PROC_CGROUP_SET_LAUNCH_REQUEST;
+	} else if (!strncmp(pkgtype, "watch", 5)) {
+		apptype = PROC_TYPE_WATCH;
+		status = PROC_CGROUP_SET_LAUNCH_REQUEST;
+	} else
+		return;
+
+	resourced_proc_status_change(status, pid, appid, pkgid, apptype);
+}
+
+static void proc_dbus_aul_resume(void *data, DBusMessage *msg)
+{
+	DBusError err;
+	dbus_error_init(&err);
+	pid_t pid;
+	int status = PROC_CGROUP_SET_RESUME_REQUEST, apptype;
+	char *appid, *pkgid, *pkgtype;
+
+	if (dbus_message_is_signal(msg, AUL_APPSTATUS_INTERFACE_NAME,
+		    SIGNAL_AMD_RESUME) == 0) {
+		_D("there is no aul resume signal");
+		return;
+	}
+
+	if (dbus_message_get_args(msg, &err, DBUS_TYPE_INT32, &pid,
+		    DBUS_TYPE_STRING, &appid, DBUS_TYPE_STRING, &pkgid,
+		    DBUS_TYPE_STRING, &pkgtype, DBUS_TYPE_INVALID) == 0) {
+		_D("there is no message");
+		return;
+	}
+	dbus_error_free(&err);
+
+	if (!strncmp(pkgtype, "svc", 3))
+		apptype = PROC_TYPE_SERVICE;
+	else if (!strncmp(pkgtype, "widget", 6))
+		apptype = PROC_TYPE_WIDGET;
+	else if (!strncmp(pkgtype, "watch", 5))
+		apptype = PROC_TYPE_WATCH;
+	else
+		apptype = PROC_TYPE_GUI;
+
+	resourced_proc_status_change(status, pid, appid, pkgid, apptype);
+}
+
+static void proc_dbus_aul_terminate(void *data, DBusMessage *msg)
+{
+	DBusError err;
+	dbus_error_init(&err);
+	pid_t pid;
+	int status = PROC_CGROUP_SET_TERMINATE_REQUEST;
+	char *appid, *pkgid, *pkgtype;
+
+	if (dbus_message_is_signal(msg, AUL_APPSTATUS_INTERFACE_NAME,
+		    SIGNAL_AMD_TERMINATE) == 0) {
+		_D("there is no aul terminate signal");
+		return;
+	}
+
+	if (dbus_message_get_args(msg, &err, DBUS_TYPE_INT32, &pid,
+		    DBUS_TYPE_STRING, &appid, DBUS_TYPE_STRING, &pkgid,
+		    DBUS_TYPE_STRING, &pkgtype, DBUS_TYPE_INVALID) == 0) {
+		_D("there is no message");
+		return;
+	}
+	dbus_error_free(&err);
+
+	resourced_proc_status_change(status, pid, appid, pkgid, PROC_TYPE_NONE);
+}
+
+static void proc_dbus_aul_changestate(void *data, DBusMessage *msg)
+{
+	DBusError err;
+	dbus_error_init(&err);
+	pid_t pid;
+	int status, apptype;
+	char *appid, *pkgid, *statstr, *pkgtype;
+
+	if (dbus_message_is_signal(msg, AUL_APPSTATUS_INTERFACE_NAME,
+		    SIGNAL_AMD_STATE) == 0) {
+		_D("there is no aul changestate signal");
+		return;
+	}
+
+	if (dbus_message_get_args(msg, &err, DBUS_TYPE_INT32, &pid,
+		    DBUS_TYPE_STRING, &appid, DBUS_TYPE_STRING, &pkgid,
+		    DBUS_TYPE_STRING, &statstr, DBUS_TYPE_STRING, &pkgtype,
+		    DBUS_TYPE_INVALID) == 0) {
+		_D("there is no message");
+		return;
+	}
+	dbus_error_free(&err);
+
+	if (!strncmp(statstr, "fg", 2))
+		status = PROC_CGROUP_SET_FOREGRD;
+	else if (!strncmp(statstr, "bg", 2))
+		status = PROC_CGROUP_SET_BACKGRD;
+	else
+		return;
+
+	if (!strncmp(pkgtype, "svc", 3))
+		apptype = PROC_TYPE_SERVICE;
+	else if (!strncmp(pkgtype, "widget", 6))
+		apptype = PROC_TYPE_WIDGET;
+	else if (!strncmp(pkgtype, "watch", 5))
+		apptype = PROC_TYPE_WATCH;
+	else
+		apptype = PROC_TYPE_GUI;
+
+	resourced_proc_status_change(status, pid, appid, pkgid, apptype);
+}
+
+static void proc_dbus_aul_group(void *data, DBusMessage *msg)
+{
+	DBusError err;
+	dbus_error_init(&err);
+	pid_t ownerpid, childpid;
+	char *appid;
+
+	if (dbus_message_is_signal(msg, AUL_APPSTATUS_INTERFACE_NAME,
+		    SIGNAL_AMD_GROUP) == 0) {
+		_D("there is no aul group signal");
+		return;
+	}
+
+	if (dbus_message_get_args(msg, &err, DBUS_TYPE_INT32, &ownerpid,
+		    DBUS_TYPE_INT32, &childpid, DBUS_TYPE_STRING, &appid,
+		    DBUS_TYPE_INVALID) == 0) {
+		_D("there is no message");
+		return;
+	}
+	dbus_error_free(&err);
+
+	_D("received process grouping : owner %d, child %d, previous appid %s",
+		    ownerpid, childpid, appid);
+	proc_set_group(ownerpid, childpid, appid);
+}
+
+static void proc_dbus_aul_terminated(void *data, DBusMessage *msg)
+{
+	DBusError err;
+	dbus_error_init(&err);
+	pid_t pid;
+	int status = PROC_CGROUP_SET_TERMINATED;
+
+	if (dbus_message_is_signal(msg, AUL_APPSTATUS_INTERFACE_NAME,
+		    SIGNAL_AMD_TERMINATED) == 0) {
+		_D("there is no aul terminate signal");
+		return;
+	}
+
+	if (dbus_message_get_args(msg, &err, DBUS_TYPE_INT32, &pid,
+		    DBUS_TYPE_INVALID) == 0) {
+		_D("there is no message");
+		return;
+	}
+	dbus_error_free(&err);
+
+	_D("received terminated process : pid %d", pid);
+	resourced_proc_status_change(status, pid, NULL, NULL, PROC_TYPE_NONE);
+}
+
+static void proc_dbus_suspend_hint(void *data, DBusMessage *msg)
+{
+	DBusError err;
+	dbus_error_init(&err);
+	pid_t pid;
+	struct proc_app_info *pai = NULL;
+	struct proc_status ps = {0};
+	enum proc_state state;
+
+	if (dbus_message_is_signal(msg, AUL_SUSPEND_INTERFACE_NAME,
+		    SIGNAL_AMD_SUSPNED) == 0) {
+		_D("there is no aul terminate signal");
+		return;
+	}
+
+	if (dbus_message_get_args(msg, &err, DBUS_TYPE_INT32, &pid,
+		    DBUS_TYPE_INVALID) == 0) {
+		_D("there is no message");
+		return;
+	}
+	dbus_error_free(&err);
+
+	_D("received susnepd hint : pid %d", pid);
+	pai = find_app_info(pid);
+	if (!pai)
+		return;
+
+	state = proc_check_suspend_state(pai);
+	if (state == PROC_STATE_SUSPEND) {
+		ps.pid = pid;
+		ps.pai = pai;
+		resourced_notify(RESOURCED_NOTIFIER_APP_SUSPEND,
+			    &ps);
+	}
+}
+
+static const struct edbus_method edbus_methods[] = {
+	{ "Signal", "ii", NULL, edbus_signal_trigger },
+	{ "GetAppCpu", "s", "u", edbus_get_app_cpu },
+	{ "GetCpuList", NULL, "a(su)", edbus_get_cpu_list },
+	{ "GetCpuLists", "i", "a(su)", edbus_get_cpu_lists },
+	{ "GetAppMemory", "s", "u", edbus_get_app_memory },
+	{ "GetMemoryList", NULL, "a(su)", edbus_get_memory_list },
+	{ "GetMemoryLists", "i", "a(su)", edbus_get_memory_lists },
+	{ "GetMemInfo", NULL, "uuuuu", edbus_get_meminfo },
+	/* Add methods here */
+};
+
+static const struct edbus_signal edbus_signals[] = {
+	/* RESOURCED DBUS */
+	{RESOURCED_PATH_PROCESS, RESOURCED_INTERFACE_PROCESS,
+	    SIGNAL_PROC_WATCHDOG_RESULT, proc_dbus_watchdog_result, NULL},
+	{RESOURCED_PATH_PROCESS, RESOURCED_INTERFACE_PROCESS,
+	    SIGNAL_PROC_ACTIVE, proc_dbus_active_signal_handler, NULL},
+	{RESOURCED_PATH_PROCESS, RESOURCED_INTERFACE_PROCESS,
+	    SIGNAL_PROC_EXCLUDE, proc_dbus_exclude_signal_handler, NULL},
+	{RESOURCED_PATH_PROCESS, RESOURCED_INTERFACE_PROCESS,
+	    SIGNAL_PROC_PRELAUNCH, proc_dbus_prelaunch_signal_handler, NULL},
+	{RESOURCED_PATH_PROCESS, RESOURCED_INTERFACE_PROCESS,
+	    SIGNAL_PROC_SWEEP, proc_dbus_sweep_signal_handler, NULL},
+	{RESOURCED_PATH_PROCESS, RESOURCED_INTERFACE_PROCESS,
+	    SIGNAL_PROC_WATCHDOG, proc_dbus_watchdog_handler, NULL},
+	{RESOURCED_PATH_PROCESS, RESOURCED_INTERFACE_PROCESS,
+	    SIGNAL_PROC_SYSTEMSERVICE, proc_dbus_systemservice_handler, NULL},
+
+	/* DEVICED DBUS */
+	{DEVICED_PATH_DISPLAY, DEVICED_INTERFACE_DISPLAY,
+	    SIGNAL_DEVICED_LCDON, proc_dbus_lcd_on, NULL},
+	{DEVICED_PATH_DISPLAY, DEVICED_INTERFACE_DISPLAY,
+	    SIGNAL_DEVICED_LCDOFF, proc_dbus_lcd_off, NULL},
+	{DEVICED_PATH_CORE, DEVICED_INTERFACE_CORE,
+	    SIGNAL_DEVICED_BOOTINGDONE, booting_done_signal_handler, NULL},
+	{DEVICED_PATH_POWEROFF, DEVICED_INTERFACE_POWEROFF,
+	    SIGNAL_DEVICED_POWEROFF_STATE, poweroff_signal_handler, NULL},
+	{DEVICED_PATH_BATTERY, DEVICED_INTERFACE_BATTERY,
+	    SIGNAL_DEVICED_LOW_BATTERY, low_battery_signal_handler, NULL},
+	{DUMP_SERVICE_OBJECT_PATH, DUMP_SERVICE_INTERFACE_NAME,
+	    SIGNAL_DUMP, proc_dbus_dump_handler, NULL},
+	{DEVICED_PATH_CORE, DEVICED_INTERFACE_CORE,
+	    SIGNAL_DEVICED_EARLY_BOOTING_DONE,
+	    early_booting_done_signal_handler, NULL},    
+
+	/* AMD DBUS */
+	{AUL_APPSTATUS_OBJECT_PATH, AUL_APPSTATUS_INTERFACE_NAME,
+	    SIGNAL_AMD_LAUNCH, proc_dbus_aul_launch, NULL},
+	{AUL_APPSTATUS_OBJECT_PATH, AUL_APPSTATUS_INTERFACE_NAME,
+	    SIGNAL_AMD_RESUME, proc_dbus_aul_resume, NULL},
+	{AUL_APPSTATUS_OBJECT_PATH, AUL_APPSTATUS_INTERFACE_NAME,
+	    SIGNAL_AMD_TERMINATE, proc_dbus_aul_terminate, NULL},
+	{AUL_APPSTATUS_OBJECT_PATH, AUL_APPSTATUS_INTERFACE_NAME,
+	    SIGNAL_AMD_STATE, proc_dbus_aul_changestate, NULL},
+	{AUL_APPSTATUS_OBJECT_PATH, AUL_APPSTATUS_INTERFACE_NAME,
+	    SIGNAL_AMD_GROUP, proc_dbus_aul_group, NULL},
+	{AUL_APPSTATUS_OBJECT_PATH, AUL_APPSTATUS_INTERFACE_NAME,
+	    SIGNAL_AMD_TERMINATED, proc_dbus_aul_terminated, NULL},
+	{AUL_SUSPEND_OBJECT_PATH, AUL_SUSPEND_INTERFACE_NAME,
+	    SIGNAL_AMD_SUSPNED, proc_dbus_suspend_hint, NULL},
+};
+
+static int proc_dbus_init(void *data)
+{
+	edbus_add_signals(edbus_signals, ARRAY_SIZE(edbus_signals));
 
 	/* start watchdog check timer for preveting ANR during booting */
 	watchdog_check_timer =
@@ -564,7 +1192,16 @@ static resourced_ret_c proc_dbus_init(void)
 			  ARRAY_SIZE(edbus_methods));
 }
 
-resourced_ret_c proc_monitor_init(void)
+static int proc_dbus_exit(void *data)
 {
-	return proc_dbus_init();
+	if (watchdog_check_timer)
+		ecore_timer_del(watchdog_check_timer);
+	return RESOURCED_ERROR_NONE;
 }
+
+static const struct proc_module_ops proc_dbus_ops = {
+	.name		= "PROC_DBUS",
+	.init		= proc_dbus_init,
+	.exit		= proc_dbus_exit,
+};
+PROC_MODULE_REGISTER(&proc_dbus_ops)

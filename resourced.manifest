@@ -3,10 +3,32 @@
 		<domain name="resourced"/>
 		<provide>
 			<label name="resourced::db"/>
+			<label name="resourced::storage::db"/>
+			<label name="resourced::storage::wal"/>
+			<label name="resourced::systeminfo"/>
 		</provide>
+		<request>
+			<smack request="resourced::systeminfo" type="rw"/>
+		</request>
 	</define>
 	<assign>
 		<filesystem path="/opt/usr/dbspace/.resourced-datausage.db*" label="resourced::db"/>
+		<filesystem path="/opt/usr/dbspace/.resourced-logging-storage.db" label="resourced::storage::db"/>
+		<filesystem path="/opt/usr/dbspace/.resourced-logging-storage.db-shm" label="resourced::storage::wal"/>
+		<filesystem path="/opt/usr/dbspace/.resourced-logging-storage.db-wal" label="resourced::storage::wal"/>
+		<filesystem path="/etc/dbus-1/system.d/resourced.conf" label="_"/>
+		<dbus name="org.tizen.resourced" own="resourced" bus="system">
+			<node name="/Org/Tizen/ResourceD/Process">
+				<interface name="org.tizen.resourced.process">
+					<method name="ProcMemoryUsage">
+						<annotation name="com.tizen.smack" value="resourced::systeminfo" />
+					</method>
+					<method name="ProcCpuUsage">
+						<annotation name="com.tizen.smack" value="resourced::systeminfo" />
+					</method>
+				</interface>
+			</node>
+		</dbus>
 	</assign>
 	<request>
 		<domain name="resourced"/>

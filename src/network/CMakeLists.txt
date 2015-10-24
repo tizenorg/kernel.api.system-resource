@@ -26,6 +26,7 @@ ENDIF()
 INCLUDE_DIRECTORIES(${INCLUDE_PUBLIC_DIR}
 		${NETWORK_SOURCE_DIR}/include
 		${RESOURCED_INCLUDEDIR}
+		${INCLUDE_MEMORY_DIR}
 	)
 
 SET (REQUIRES_LIST dlog
@@ -34,12 +35,9 @@ SET (REQUIRES_LIST dlog
 		   vconf
 		   ecore
 		   edbus
+		   openssl
+		   tapi
 )
-
-IF("${TETHERING_FEATURE}" STREQUAL "ON")
-	SET(REQUIRES_LIST ${REQUIRES_LIST}
-		   capi-network-connection)
-ENDIF()
 
 INCLUDE(FindPkgConfig)
 pkg_check_modules(pkgs_${NETWORK} REQUIRED ${REQUIRES_LIST})
@@ -59,10 +57,6 @@ ENDIF("${ARCH}" STREQUAL "arm")
 ADD_DEFINITIONS("-DPREFIX=\"${CMAKE_INSTALL_PREFIX}\"")
 ADD_DEFINITIONS("-DSLP_DEBUG")
 
-IF("${NETWORK_SERVICE}" STREQUAL "OFF")
-	ADD_DEFINITIONS("-DNETWORK_SERVICE_OFF")
-ENDIF()
-
 #### libs ####
 
 SET(settings_HEADERS
@@ -81,12 +75,6 @@ SET(storage_SOURCES
   ${NETWORK_SOURCE_DIR}/datausage-quota-processing.c #storage uses it
   ${NETWORK_SOURCE_DIR}/storage.c)
 
-SET(protocol-info_HEADERS
-  ${NETWORK_SOURCE_DIR}/include/protocol-info.h)
-
-SET(protocol-info_SOURCES
-  ${NETWORK_SOURCE_DIR}/protocol-info.c)
-
 SET(quota_HEADERS
   ${NETWORK_SOURCE_DIR}/include/datausage-quota-processing.h)
 
@@ -94,9 +82,6 @@ SET(quota_SOURCES
   ${COMMON_SOURCE_DIR}/edbus-handler.c
   ${NETWORK_SOURCE_DIR}/datausage-quota.c
   )
-
-SET(app-stat_HEADERS
-  ${INCLUDE_COMMON_DIR}/app-stat.h)
 
 SET(app-stat_SOURCES
   ${NETWORK_SOURCE_DIR}/app-stat.c)
@@ -106,33 +91,31 @@ SET(net-iface_HEADERS
 
 SET(net-iface_SOURCES
   ${NETWORK_SOURCE_DIR}/iface.c
+  ${COMMON_SOURCE_DIR}/config-parser.c
 )
 
-SET(roaming_HEADERS
-  ${NETWORK_SOURCE_DIR}/include/roaming.h)
+SET(telephony_HEADERS
+  ${NETWORK_SOURCE_DIR}/include/telephony.h)
 
-SET(roaming_SOURCES
-  ${NETWORK_SOURCE_DIR}/dummy_roaming.c)
-
-ADD_LIBRARY(protocol-info STATIC
-  ${protocol-info_SOURCES} ${protocol-info_HEADERS})
+SET(telephony_SOURCES
+  ${NETWORK_SOURCE_DIR}/telephony.c)
 
 ADD_LIBRARY(storage STATIC
   ${storage_SOURCES} ${storage_HEADERS}
   ${quota_SOURCES} ${quota_HEADERS}
   )
-TARGET_LINK_LIBRARIES(storage protocol-info ${pkgs_${NETWORK}_LDFLAGS})
+TARGET_LINK_LIBRARIES(storage ${pkgs_${NETWORK}_LDFLAGS})
 
 ADD_LIBRARY(app-stat STATIC
-  ${app-stat_SOURCES} ${app-stat_HEADERS})
+  ${app-stat_SOURCES})
 TARGET_LINK_LIBRARIES(app-stat net-cls)
 
 ADD_LIBRARY(net-iface STATIC
   ${net-iface_SOURCES})
 
-ADD_LIBRARY(roaming STATIC
-  ${roaming_SOURCES})
-TARGET_LINK_LIBRARIES(roaming ${pkgs_${NETWORK}_LDFLAGS})
+ADD_LIBRARY(telephony STATIC
+  ${telephony_SOURCES})
+TARGET_LINK_LIBRARIES(telephony ${pkgs_${NETWORK}_LDFLAGS})
 
 SET(net-cls_HEADERS
   ${NETWORK_SOURCE_DIR}/include/net-cls-cgroup.h)
@@ -161,7 +144,7 @@ SET(${PROJECT}_SOURCES
   ${COMMON_SOURCE_DIR}/file-helper.c
   ${NETWORK_SOURCE_DIR}/foreach.c
   ${NETWORK_SOURCE_DIR}/join.c
-  ${NETWORK_SOURCE_DIR}/options.c
+  ${NETWORK_SOURCE_DIR}/options-public.c
   ${NETWORK_SOURCE_DIR}/reset.c
   ${NETWORK_SOURCE_DIR}/restriction.c
   ${NETWORK_SOURCE_DIR}/update.c
@@ -193,18 +176,13 @@ FOREACH(flag ${shared_pkgs_CFLAGS})
 ENDFOREACH(flag)
 
 SET(EXTRA_CFLAGS "${EXTRA_CFLAGS} -fPIC")
-
-INCLUDE_DIRECTORIES(${RESOURCED_INCLUDEDIR}
-		    ${NETWORK_SOURCE_DIR}/include
-		    ${RESOURCED_SOURCE_DIR})
-
 SET(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${EXTRA_CFLAGS}")
 
 ADD_LIBRARY(${PROJECT} SHARED
   ${${PROJECT}_HEADERS}
   ${${PROJECT}_SOURCES})
 
-TARGET_LINK_LIBRARIES(${PROJECT} roaming settings net-cls
+TARGET_LINK_LIBRARIES(${PROJECT} telephony settings net-cls
   ${shared_pkgs_LDFLAGS})
 
 SET_TARGET_PROPERTIES(${PROJECT}
@@ -218,30 +196,12 @@ ADD_EXECUTABLE(datausagetool ${UTILS_SOURCE_DIR}/datausage-tool.c)
 TARGET_LINK_LIBRARIES(datausagetool
 		      ${PROJECT}
 		      ${COMMON_SOURCE_DIR}/config-parser.c
-		      net-iface)
+		      #	      ${NETWORK_SOURCE_DIR}/app-stat.c
+		      net-iface
+		      )
 INSTALL(TARGETS datausagetool
     DESTINATION /usr/bin)
 
 INSTALL(TARGETS ${PROJECT} DESTINATION lib)
 INSTALL(FILES ${INCLUDE_PUBLIC_DIR}/data_usage.h DESTINATION include/system)
 #### lib-resourced ####
-
-#### rd-network ####
-SET(SOURCES
-	${NETWORK_SOURCE_DIR}/network-dummy.c)
-
-ADD_LIBRARY(${NETWORK} SHARED ${SOURCES})
-ADD_DEPENDENCIES(${NETWORK} ${PROJECT})
-TARGET_LINK_LIBRARIES(${NETWORK} ${${NETWORK}_LDFLAGS} -L${LIBRARY_OUTPUT_PATH} -l${PROJECT})
-
-SET_TARGET_PROPERTIES(${NETWORK}
-     PROPERTIES
-     VERSION ${FULLVER}
-     SOVERSION ${MAJORVER}
-     CLEAN_DIRECT_OUTPUT 1
-)
-
-INSTALL(TARGETS ${NETWORK} DESTINATION lib)
-INSTALL(FILES ${INCLUDE_PUBLIC_DIR}/rd-network.h DESTINATION include/system)
-
-#### rd-network ####

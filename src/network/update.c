@@ -30,7 +30,6 @@
 #include "const.h"
 #include "edbus-handler.h"
 #include "macro.h"
-#include "rd-network.h"
 #include "trace.h"
 
 static E_DBus_Signal_Handler *handler;

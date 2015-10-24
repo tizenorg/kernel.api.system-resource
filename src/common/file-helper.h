@@ -33,18 +33,28 @@
  * @param path - path to the file, str - string is written to the file
  * @return negative value if error
  */
-resourced_ret_c fwrite_str(const char *path, const char *str);
+int fwrite_str(const char *path, const char *str);
 
-resourced_ret_c fwrite_int(const char *path, const int number);
+int fwrite_int(const char *path, const int number);
 
-resourced_ret_c fwrite_uint(const char *path, const u_int32_t number);
+int fwrite_uint(const char *path, const u_int32_t number);
 
-resourced_ret_c fread_int(const char *path, u_int32_t *number);
+int fread_int(const char *path, int32_t *number);
 
-resourced_ret_c fwrite_array(const char *path, const void *array,
-			     const size_t size_of_elem,
-			     const size_t numb_of_elem);
+int fread_uint(const char *path, u_int32_t *number);
+
+int fwrite_array(const char *path, const void *array,
+		 const size_t size_of_elem,
+		 const size_t numb_of_elem);
 
 char *cread(const char *path);
 char *cgets(char **contents);
+
+/**
+ * @desc copy file from src to dest
+ * @param dest- destination file path, src- source file path
+ * @return negative value if error
+ */
+int copy_file(char *dest, char *src);
+
 #endif  /*_RESOURCED_FILE_HELPER_H_*/

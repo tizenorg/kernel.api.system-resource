@@ -32,10 +32,8 @@
 #include "edbus-handler.h"
 #include "resourced.h"
 #include "macro.h"
-
-#define SIGNAL_NAME_OOM_SET_THRESHOLD			"SetThreshold"
-#define SIGNAL_NAME_OOM_SET_LEAVE_THRESHOLD		"SetLeaveThreshold"
-#define SIGNAL_NAME_OOM_TRIGGER			"Trigger"
+#include "memory-common.h"
+#include "procfs.h"
 
 static void lowmem_dbus_oom_set_threshold(void *data, DBusMessage *msg)
 {
@@ -43,7 +41,8 @@ static void lowmem_dbus_oom_set_threshold(void *data, DBusMessage *msg)
 	int ret;
 	int level, thres;
 
-	ret = dbus_message_is_signal(msg, RESOURCED_INTERFACE_OOM, SIGNAL_NAME_OOM_SET_THRESHOLD);
+	ret = dbus_message_is_signal(msg, RESOURCED_INTERFACE_OOM,
+	    SIGNAL_OOM_SET_THRESHOLD);
 
 	if (ret == 0) {
 		_D("there is no oom set threshold signal");
@@ -52,14 +51,15 @@ static void lowmem_dbus_oom_set_threshold(void *data, DBusMessage *msg)
 
 	dbus_error_init(&err);
 
-	ret = dbus_message_get_args(msg, &err, DBUS_TYPE_INT32, &level, DBUS_TYPE_INT32, &thres, DBUS_TYPE_INVALID);
+	ret = dbus_message_get_args(msg, &err, DBUS_TYPE_INT32, &level,
+	    DBUS_TYPE_INT32, &thres, DBUS_TYPE_INVALID);
 
 	if (ret == 0) {
 		_D("there is no message");
 		return;
 	}
 
-	set_threshold(level, thres);
+	lowmem_memcg_set_threshold(MEMCG_MEMORY, level, thres);
 }
 
 static void lowmem_dbus_oom_set_leave_threshold(void *data, DBusMessage *msg)
@@ -68,7 +68,8 @@ static void lowmem_dbus_oom_set_leave_threshold(void *data, DBusMessage *msg)
 	int ret;
 	int thres;
 
-	ret = dbus_message_is_signal(msg, RESOURCED_INTERFACE_OOM, SIGNAL_NAME_OOM_SET_LEAVE_THRESHOLD);
+	ret = dbus_message_is_signal(msg, RESOURCED_INTERFACE_OOM,
+	    SIGNAL_OOM_SET_LEAVE_THRESHOLD);
 
 	if (ret == 0) {
 		_D("there is no oom set leave threshold signal");
@@ -77,24 +78,24 @@ static void lowmem_dbus_oom_set_leave_threshold(void *data, DBusMessage *msg)
 
 	dbus_error_init(&err);
 
-	ret = dbus_message_get_args(msg, &err, DBUS_TYPE_INT32, &thres, DBUS_TYPE_INVALID);
+	ret = dbus_message_get_args(msg, &err, DBUS_TYPE_INT32, &thres,
+	    DBUS_TYPE_INVALID);
 
 	if (ret == 0) {
 		_D("there is no message");
 		return;
 	}
 
-	set_leave_threshold(thres);
+	lowmem_memcg_set_leave_threshold(MEMCG_MEMORY, thres);
 }
 
 static void lowmem_dbus_oom_trigger(void *data, DBusMessage *msg)
 {
 	DBusError err;
 	int ret;
-	int launching = 0;
-	int flags = OOM_FORCE;
 
-	ret = dbus_message_is_signal(msg, RESOURCED_INTERFACE_OOM, SIGNAL_NAME_OOM_TRIGGER);
+	ret = dbus_message_is_signal(msg, RESOURCED_INTERFACE_OOM,
+	    SIGNAL_OOM_TRIGGER);
 	if (ret == 0) {
 		_D("there is no oom trigger signal");
 		return;
@@ -102,27 +103,73 @@ static void lowmem_dbus_oom_trigger(void *data, DBusMessage *msg)
 
 	dbus_error_init(&err);
 
-	ret = dbus_message_get_args(msg, &err, DBUS_TYPE_INT32, &launching, DBUS_TYPE_INVALID);
-
-	if (launching)
-		flags |= OOM_NOMEMORY_CHECK;
-
-	change_memory_state(MEMNOTIFY_LOW, 1);
-	lowmem_oom_killer_cb(MEMCG_MEMORY, flags);
-	_D("flags = %d", flags);
-	change_memory_state(MEMNOTIFY_NORMAL, 0);
+	lowmem_change_memory_state(LOWMEM_LOW, 1);
+	lowmem_memory_oom_killer(OOM_FORCE | OOM_NOMEMORY_CHECK);
+	lowmem_change_memory_state(LOWMEM_NORMAL, 0);
 }
+
+static void lowmem_dbus_set_perceptible(void *data, DBusMessage *msg)
+{
+	DBusError err;
+	int ret;
+	pid_t pid;
+
+	dbus_error_init(&err);
+	ret = dbus_message_is_signal(msg, RESOURCED_INTERFACE_OOM,
+	    SIGNAL_OOM_SET_PERCEPTIBLE);
+	if (ret == 0) {
+		_D("there is no set perceptible signal");
+		return;
+	}
+
+	if (dbus_message_get_args(msg, &err, DBUS_TYPE_INT32, &pid,
+		    DBUS_TYPE_INVALID) == 0) {
+		_D("there is no message");
+		return;
+	}
+	dbus_error_free(&err);
+	proc_set_oom_score_adj(pid, OOMADJ_BACKGRD_PERCEPTIBLE);
+}
+
+static void lowmem_dbus_set_platform(void *data, DBusMessage *msg)
+{
+	DBusError err;
+	int ret;
+	pid_t pid;
+
+	dbus_error_init(&err);
+	ret = dbus_message_is_signal(msg, RESOURCED_INTERFACE_OOM,
+	    SIGNAL_OOM_SET_PLATFORM);
+	if (ret == 0) {
+		_D("there is no set platform swap signal");
+		return;
+	}
+
+	if (dbus_message_get_args(msg, &err, DBUS_TYPE_INT32, &pid,
+		    DBUS_TYPE_INVALID) == 0) {
+		_D("there is no message");
+		return;
+	}
+	dbus_error_free(&err);
+	lowmem_trigger_swap(pid, MEMCG_PLATFORM);
+}
+
+static const struct edbus_signal edbus_signals[] = {
+	/* RESOURCED DBUS */
+	{RESOURCED_PATH_OOM, RESOURCED_INTERFACE_OOM,
+	    SIGNAL_OOM_SET_THRESHOLD, lowmem_dbus_oom_set_threshold, NULL},
+	{RESOURCED_PATH_OOM, RESOURCED_INTERFACE_OOM,
+	    SIGNAL_OOM_SET_LEAVE_THRESHOLD,
+	    lowmem_dbus_oom_set_leave_threshold, NULL},
+	{RESOURCED_PATH_OOM, RESOURCED_INTERFACE_OOM,
+	    SIGNAL_OOM_TRIGGER, lowmem_dbus_oom_trigger, NULL},
+	{RESOURCED_PATH_OOM, RESOURCED_INTERFACE_OOM,
+	    SIGNAL_OOM_SET_PERCEPTIBLE, lowmem_dbus_set_perceptible, NULL},
+	{RESOURCED_PATH_OOM, RESOURCED_INTERFACE_OOM,
+	    SIGNAL_OOM_SET_PLATFORM, lowmem_dbus_set_platform, NULL},
+};
 
 void lowmem_dbus_init(void)
 {
-	register_edbus_signal_handler(RESOURCED_PATH_OOM, RESOURCED_INTERFACE_OOM,
-			SIGNAL_NAME_OOM_SET_THRESHOLD,
-		    lowmem_dbus_oom_set_threshold);
-	register_edbus_signal_handler(RESOURCED_PATH_OOM, RESOURCED_INTERFACE_OOM,
-			SIGNAL_NAME_OOM_SET_LEAVE_THRESHOLD,
-		    lowmem_dbus_oom_set_leave_threshold);
-	register_edbus_signal_handler(RESOURCED_PATH_OOM, RESOURCED_INTERFACE_OOM,
-			SIGNAL_NAME_OOM_TRIGGER,
-		    lowmem_dbus_oom_trigger);
-
+	edbus_add_signals(edbus_signals, ARRAY_SIZE(edbus_signals));
 }

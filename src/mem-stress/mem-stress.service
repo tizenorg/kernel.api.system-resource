@@ -1,0 +1,11 @@
+[Unit]
+Description=Memory Stress
+After=graphical.target
+ConditionPathExists=/etc/mem-stress.conf
+
+[Service]
+ExecStart=/usr/bin/mem-stress
+CPUSchedulingPolicy=idle
+OOMScoreAdjust=-1000
+StandardOutput=journal
+StandardError=inherit

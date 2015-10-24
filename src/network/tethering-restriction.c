@@ -34,24 +34,17 @@
 resourced_ret_c apply_tethering_restriction(
 	const enum traffic_restriction_type type)
 {
-#ifdef TETHERING_FEATURE
-	static int tethering_exclude;
+	_D("apply tethering rule %d", type);
 	switch (type) {
 	case RST_SET:
-		if (!tethering_exclude)
-			return fwrite_str(PATH_TO_PROC_IP_FORWARD, "0");
-		return RESOURCED_ERROR_NONE;
+		return fwrite_str(PATH_TO_PROC_IP_FORWARD, "0");
 	case RST_UNSET:
-		tethering_exclude = 0;
 		return fwrite_str(PATH_TO_PROC_IP_FORWARD, "1");
 	case RST_EXCLUDE:
-		tethering_exclude = 1;
 		return fwrite_str(PATH_TO_PROC_IP_FORWARD, "1");
 	default:
 		return RESOURCED_ERROR_INVALID_PARAMETER;
 
 	}
-#else
 	return RESOURCED_ERROR_NONE;
-#endif /* TETHERING_FEATURE */
 }

@@ -27,25 +27,27 @@
 #ifndef _RESOURCED_MACRO_H_
 #define _RESOURCED_MACRO_H_
 
-#define execute_once \
-	static int __func__##guardian;                                   \
-	for (; \
-	__func__##guardian == 0; \
-	__func__##guardian = 1)
+#define execute_once				\
+	static int __func__##guardian;		\
+	for (;					\
+	     __func__##guardian == 0;		\
+	     __func__##guardian = 1)
 
 #include <assert.h>
 #include <stdio.h>
 #include <config.h>
 
+#ifndef API
 #define API __attribute__((visibility("default")))
+#endif
 
 #define ARRAY_SIZE(x) (sizeof(x)/sizeof(x[0]))
 
-#define DECLARE_WRAPPER(fn_name, inner_fn) \
-static void fn_name(void *data, void __attribute__((__unused__)) *not_used) \
-{\
-	return inner_fn(data);                        \
-}
+#define DECLARE_WRAPPER(fn_name, inner_fn)				\
+	static void fn_name(void *data, void __attribute__((__unused__)) *not_used) \
+	{								\
+		return inner_fn(data);					\
+	}
 
 #define UNUSED __attribute__((__unused__))
 
@@ -61,46 +63,55 @@ static void fn_name(void *data, void __attribute__((__unused__)) *not_used) \
  * plus 1 null termination byte
  * plus 1 for negative prefix
  */
-#define MAX_DEC_SIZE(type) \
-	(2 + (sizeof(type) <= 1 ? 3 : \
-	sizeof(type) <= 2 ? 5 : \
-	sizeof(type) <= 4 ? 10 : \
-	sizeof(type) <= 8 ? 20 : \
-	sizeof(int[-2*(sizeof(type) > 8)])))
+#define MAX_DEC_SIZE(type)				\
+	(2 + (sizeof(type) <= 1 ? 3 :			\
+	      sizeof(type) <= 2 ? 5 :			\
+	      sizeof(type) <= 4 ? 10 :			\
+	      sizeof(type) <= 8 ? 20 :			\
+	      sizeof(int[-2*(sizeof(type) > 8)])))
 
-#define ret_msg_if(expr, fmt, arg...) do { \
-        if (expr) { \
-		_E(fmt, ##arg);			\
-                return; \
-        } \
-} while (0)
+#define SET_BIT(a, bit)				\
+	((a) |= (bit))
 
-#define ret_value_if(expr, val) do { \
-        if (expr) { \
-                _E("(%s) -> %s():%d return", #expr, __FUNCTION__, __LINE__); \
-                return (val); \
-        } \
-} while (0)
+#define UNSET_BIT(a, bit)			\
+	((a) &= ~(bit))
 
-#define ret_value_msg_if(expr, val, fmt, arg...) do {	\
+#define CHECK_BIT(a, bit)			\
+	((a) & (bit))
+
+#define ret_msg_if(expr, fmt, arg...) do {	\
 	if (expr) {				\
 		_E(fmt, ##arg);			\
-		return val;			\
+		return;				\
 	}					\
 } while (0)
 
-#define ret_value_secure_msg_if(expr, val, fmt, arg...) do {	\
-		if (expr) { 			\
-			_SE(fmt, ##arg); 		\
-			return val; 		\
-		}					\
-	} while (0)
+#define ret_value_if(expr, val) do {					\
+	if (expr) {							\
+		_E("(%s) -> %s():%d return", #expr, __FUNCTION__, __LINE__); \
+		return (val);						\
+	}								\
+} while (0)
 
-#define ret_value_errno_msg_if(expr, val, fmt, arg...) do {	\
+#define ret_value_msg_if(expr, val, fmt, arg...) do {	\
 	if (expr) {					\
-		ETRACE_ERRNO_MSG(fmt, ##arg);		\
+		_E(fmt, ##arg);				\
 		return val;				\
 	}						\
+} while (0)
+
+#define ret_value_secure_msg_if(expr, val, fmt, arg...) do {	\
+	if (expr) {						\
+		_SE(fmt, ##arg);				\
+		return val;					\
+	}							\
+} while (0)
+
+#define ret_value_errno_msg_if(expr, val, fmt, arg...) do {	\
+	if (expr) {						\
+		ETRACE_ERRNO_MSG(fmt, ##arg);			\
+		return val;					\
+	}							\
 } while (0)
 
 /*
@@ -108,42 +119,43 @@ static void fn_name(void *data, void __attribute__((__unused__)) *not_used) \
  * destination should not be on heap.
  * Destination will be null terminated
  */
-#define STRING_SAVE_COPY(destination, source) \
-	do { \
-		size_t null_pos = strlen(source); \
-		strncpy(destination, source, sizeof(destination)); \
-		null_pos = sizeof(destination) - 1 < null_pos ? \
-			sizeof(destination) - 1 : null_pos; \
-		destination[null_pos] = '\0'; \
-	} while(0)
+#define STRING_SAVE_COPY(destination, source) do {			\
+	if (destination && source) {					\
+		size_t null_pos = strlen(source);			\
+		strncpy(destination, source, sizeof(destination));	\
+		null_pos = sizeof(destination) - 1 < null_pos ?		\
+			sizeof(destination) - 1 : null_pos;		\
+		destination[null_pos] = '\0';				\
+	}								\
+} while (0)
 
 /* FIXME: Do we really need pointers? */
-#define array_foreach(key, type, array)                                 \
-	guint _array_foreach_index;                                             \
-	type *key;                                                            \
-	for (_array_foreach_index = 0;                                         \
-		array && _array_foreach_index < array->len && \
-		(key = &g_array_index(array, type, _array_foreach_index)); \
-		++_array_foreach_index)
+#define array_foreach(key, type, array)					\
+		guint _array_foreach_index;				\
+		type *key;						\
+		for (_array_foreach_index = 0;				\
+		     array && _array_foreach_index < array->len &&	\
+			     (key = &g_array_index(array, type, _array_foreach_index)); \
+		     ++_array_foreach_index)
 
-#define slist_foreach(key, type, list)                       \
-	type *key;                                                 \
-	GSList *_slist_foreach_copy_list = list;                               \
-	for (;                                                                \
-	_slist_foreach_copy_list && \
-	((key = _slist_foreach_copy_list->data) || 1); \
-	_slist_foreach_copy_list = _slist_foreach_copy_list->next)
+#define slist_foreach(key, type, list)					\
+	type *key;							\
+	GSList *_slist_foreach_copy_list = list;			\
+	for (;								\
+	     _slist_foreach_copy_list &&				\
+		     ((key = _slist_foreach_copy_list->data) || 1);	\
+	     _slist_foreach_copy_list = _slist_foreach_copy_list->next)
 
-#define gslist_for_each_item(item, list)                       \
+#define gslist_for_each_item(item, list)				\
 	for(item = list; item != NULL; item = g_slist_next(item))
 
-#define gslist_for_each(head, elem, node)	\
+#define gslist_for_each(head, elem, node)				\
 	for (elem = head, node = NULL; elem && ((node = elem->data) != NULL); elem = elem->next, node = NULL)
 
-#define gslist_for_each_safe(head, elem, elem_next, node) \
-	for (elem = head, elem_next = g_list_next(elem), node = NULL; \
-			elem && ((node = elem->data) != NULL); \
-			elem = elem_next, elem_next = g_list_next(elem), node = NULL)
+#define gslist_for_each_safe(head, elem, elem_next, node)		\
+	for (elem = head, elem_next = g_slist_next(elem), node = NULL;	\
+	     elem && ((node = elem->data) != NULL);			\
+	     elem = elem_next, elem_next = g_slist_next(elem), node = NULL)
 
 #define DB_ACTION(command) do {				\
 	if ((command) != SQLITE_OK) {			\

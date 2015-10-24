@@ -27,20 +27,23 @@
 #ifndef _RESOURCED_INIT_H
 #define _RESOURCED_INIT_H
 
+#include <Ecore.h>
+
 #include "resourced.h"
 
-#include "daemon-options.h"
 #include "transmission.h"
 
 struct daemon_arg {
 	int argc;
 	char **argv;
-	struct daemon_opts *opts;
+	Ecore_Timer *ecore_quit;
 };
 
 int resourced_init(struct daemon_arg *darg);
 
-int resourced_deinit(struct daemon_arg *darg);
+int resourced_deinit(void);
+
+void resourced_quit_mainloop(void);
 
 struct counter_arg;
 

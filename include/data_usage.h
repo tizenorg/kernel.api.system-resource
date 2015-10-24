@@ -121,6 +121,8 @@ typedef struct {
 	int snd_warning_limit;
 	int rcv_warning_limit;
 	resourced_roaming_type roaming;
+	char *ifname;
+	const char *imsi;
 } resourced_net_restrictions;
 
 /**
@@ -171,7 +173,7 @@ typedef enum {
  */
 enum {
 	WARNING_THRESHOLD_DEFAULT,		/**< for quota it means
-		system-resource will evaluate proper value, for restriction it
+		resourced will evaluate proper value, for restriction it
 		means no warning */
 	WARNING_THRESHOLD_NONE,			/**< means no threshold at all */
 };
@@ -185,7 +187,7 @@ enum {
  * warning_send_threshold - threshold for warning notification on engress bytes
  * warning_rcv_threshold - threshold for warning notification on ingress bytes
  *		value - WARNING_THRESHOLD_UNDEF means no threshold
- *		      - WARNING_THRESHOLD_DEFAULT means system-resource will be
+ *		      - WARNING_THRESHOLD_DEFAULT means resourced will be
  *              responsible for evaluation threshold value
  *		The threshold value is amount of bytes remaining till blocking
  *
@@ -199,10 +201,11 @@ typedef struct {
 	int64_t rcv_quota;
 	int snd_warning_threshold;
 	int rcv_warning_threshold;
-	resourced_state_t quota_type;
+	resourced_state_t quota_type; /* TODO rename to ground */
 	resourced_iface_type iftype;
 	time_t *start_time;
 	resourced_roaming_type roaming_type;
+	const char *imsi;
 } data_usage_quota;
 
 /**
@@ -218,8 +221,10 @@ typedef struct {
  */
 struct datausage_quota_reset_rule {
 	const char *app_id;
+	const char *imsi;
 	resourced_iface_type iftype;
 	resourced_roaming_type roaming;
+	resourced_state_t quota_type;
 };
 
 /**
@@ -247,12 +252,13 @@ typedef struct {
 typedef struct {
 	const char *app_id;
 	const char *ifname;
+	const char *imsi;
 	resourced_iface_type iftype;
 	resourced_tm_interval *interval;
-	resourced_common_info foreground;
-	resourced_common_info background;
+	resourced_counters cnt;
 	resourced_roaming_type roaming;
 	resourced_hw_net_protocol_type hw_net_protocol_type;
+	resourced_state_t ground;
 } data_usage_info;
 
 /**
@@ -288,7 +294,9 @@ typedef struct {
 	resourced_option_state datacall;
 	time_t datausage_timer;
 	resourced_option_state datacall_logging;
-} resourced_options;
+} resourced_net_options;
+
+#define resourced_options resourced_net_options
 
 /**
  * @brief Structure for information on restrictions.
@@ -298,12 +306,14 @@ typedef struct {
  */
 typedef struct {
 	const char *app_id;
+	const char *ifname;
 	resourced_iface_type iftype;
 	resourced_restriction_state rst_state;
 	int rcv_limit;
 	int send_limit;
 	int quota_id;
 	resourced_roaming_type roaming;
+	const char *imsi;
 } resourced_restriction_info;
 
 /**
@@ -328,6 +338,7 @@ typedef resourced_cb_ret(*resourced_restriction_cb)(
 typedef struct {
 	unsigned char version;
 	char *app_id;
+	const char *imsi;
 	resourced_iface_type iftype;
 	resourced_tm_interval *interval;
 	resourced_connection_period_type connection_state;
@@ -367,6 +378,20 @@ resourced_ret_c remove_restriction(const char *app_id);
 
 resourced_ret_c remove_restriction_by_iftype(const char *app_id,
 					     const resourced_iface_type iftype);
+resourced_ret_c remove_restriction_full(const char *app_id,
+					const resourced_net_restrictions *restriction);
+
+
+/**
+ * @desc Remove existing restriction for application
+ *   It will delete restriction rule in kernel
+ * @param app_id[in] - application identifier, it's package name
+ * @param imsi[in] - telephony imsi
+ */
+resourced_ret_c resourced_remove_restriction(const char *app_id, char *imsi);
+
+resourced_ret_c resourced_remove_restriction_by_iftype(const char *app_id,
+					     const resourced_iface_type iftype, char *imsi);
 
 /**
  * @desc Exclude restriction for application

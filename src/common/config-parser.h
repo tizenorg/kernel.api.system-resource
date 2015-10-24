@@ -20,6 +20,12 @@
 #ifndef __CONFIG_PARSER_H__
 #define __CONFIG_PARSER_H__
 
+#include <stdio.h>
+#include <stdbool.h>
+
+#define MATCH(a, b)	(!strncmp(a, b, strlen(a)))
+#define SET_CONF(a, b)	(a = (b > 0.0 ? b : a))
+
 struct parse_result {
 	char *section;
 	char *name;
@@ -36,5 +42,40 @@ struct parse_result {
 int config_parse(const char *file_name, int cb(struct parse_result *result,
     void *user_data), void *user_data);
 
+/* Prototype for a parser for a specific configuration setting */
+typedef int (*ConfigParserCallback)(
+		const char *filename,
+		unsigned line,
+		const char *section,
+		const char *lvalue,
+		int ltype,
+		const char *rvalue,
+		void *data);
+
+typedef int (*ConfigParseFunc)(const char *path, void *data);
+
+/* Wraps information for parsing a specific configuration variable, to
+ * be stored in a simple array */
+typedef struct ConfigTableItem {
+	const char *section;		/* Section */
+	const char *lvalue;		/* Name of the variable */
+	ConfigParserCallback cb;	/* Function that is called to
+					 * parse the variable's
+					 * value */
+	int ltype;			/* Distinguish different
+					 * variables passed to the
+					 * same callback */
+	void *data;			/* Where to store the
+					 * variable's data */
+} ConfigTableItem;
+
+int config_parse_new(const char *filename, void *table);
+int config_parse_dir(const char *dir, ConfigParseFunc fp, void *data);
+
+int config_parse_bool(const char *filename, unsigned line, const char *section, const char *lvalue, int ltype, const char *rvalue, void *data);
+int config_parse_int(const char *filename, unsigned line, const char *section, const char *lvalue, int ltype, const char *rvalue, void *data);
+int config_parse_string(const char *filename, unsigned line, const char *section, const char *lvalue, int ltype, const char *rvalue, void *data);
+int config_parse_bytes(const char *filename, unsigned line, const char *section, const char *lvalue, int ltype, const char *rvalue, void *data);
+int config_parse_strv(const char *filename, unsigned line, const char *section, const char *lvalue, int ltype, const char *rvalue, void *data);
 #endif
 

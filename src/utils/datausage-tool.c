@@ -29,8 +29,8 @@
 #include <string.h>
 
 #include "data_usage.h"
+#include "macro.h"
 #include "resourced.h"
-#include "rd-network.h"
 #include "const.h"
 #include "iface.h"
 #include "config.h"
@@ -59,6 +59,8 @@ struct arg_param {
 	int64_t send_limit;
 	resourced_roaming_type roaming_type;
 	char *app_id;
+	char *imsi;
+	resourced_state_t ground;
 };
 
 static resourced_ret_c convert_roaming(const char *str,
@@ -131,12 +133,14 @@ static void print_usage()
 	puts(" -q [--quota] <appid> ");
 	puts(" -Q [--remove-quota] <appid> ");
 	puts(" -s [--rst-state] <pkgid> ");
+	puts(" -I [--imsi] sim id ");
+	puts(" -B [--background] background attribute, used for quota  ");
 }
 
 static enum run_rsml_cmd parse_cmd(int argc, char **argv,
 				  struct arg_param *param)
 {
-	const char *optstring = "hvla:e:g:uf:t:i:d::G:R:r:O:q:Q:M:s:";
+	const char *optstring = "hvla:e:g:uf:t:i:d::G:R:r:O:q:Q:M:s:I:B";
 
 	const struct option options[] = {
 		{"help", no_argument, 0, 'h'},
@@ -158,6 +162,8 @@ static enum run_rsml_cmd parse_cmd(int argc, char **argv,
 		{"remove-quota", required_argument, 0, 'Q'},
 		{"roaming", required_argument, 0, 'M'},
 		{"rst-state", required_argument, 0, 's'},
+		{"imsi", required_argument, 0, 'I'},
+		{"background", no_argument, 0, 'B'},
 		{0, 0, 0, 0}
 	};
 
@@ -182,7 +188,8 @@ static enum run_rsml_cmd parse_cmd(int argc, char **argv,
 				exit(EXIT_FAILURE);
 			}
 			cmd = RESOURCED_APPLY;
-			param->app_id = strdup(optarg);
+			free(param->app_id);
+			param->app_id = strndup(optarg, strlen(optarg)+1);
 			break;
 		case 'e':
 			if (!optarg) {
@@ -190,7 +197,8 @@ static enum run_rsml_cmd parse_cmd(int argc, char **argv,
 				exit(EXIT_FAILURE);
 			}
 			cmd = RESOURCED_EXCLUDE;
-			param->app_id = strdup(optarg);
+			free(param->app_id);
+			param->app_id = strndup(optarg, strlen(optarg)+1);
 			break;
 		case 'g':
 			cmd = RESOURCED_GET;
@@ -250,8 +258,10 @@ static enum run_rsml_cmd parse_cmd(int argc, char **argv,
 			break;
 		case 'd':
 			cmd = RESOURCED_DATA_USAGE_DETAILS;
-			if (optarg)
-				param->app_id = strdup(optarg);
+			if (optarg) {
+				free(param->app_id);
+				param->app_id = strndup(optarg, strlen(optarg)+1);
+			}
 			break;
 		case 'G':
 			if (!optarg) {
@@ -271,7 +281,8 @@ static enum run_rsml_cmd parse_cmd(int argc, char **argv,
 				exit(EXIT_FAILURE);
 			}
 			cmd = RESOURCED_REVERT;
-			param->app_id = strdup(optarg);
+			free(param->app_id);
+			param->app_id = strndup(optarg, strlen(optarg)+1);
 			break;
 		case 'l':
 			cmd = RESOURCED_GET_RESTRICTIONS;
@@ -307,7 +318,8 @@ static enum run_rsml_cmd parse_cmd(int argc, char **argv,
 				exit(EXIT_FAILURE);
 			}
 			cmd = RESOURCED_SET_QUOTA;
-			param->app_id = strdup(optarg);
+			free(param->app_id);
+			param->app_id = strndup(optarg, strlen(optarg)+1);
 
 			break;
 		case 'Q':
@@ -316,7 +328,8 @@ static enum run_rsml_cmd parse_cmd(int argc, char **argv,
 				exit(EXIT_FAILURE);
 			}
 			cmd = RESOURCED_REMOVE_QUOTA;
-			param->app_id = strdup(optarg);
+			free(param->app_id);
+			param->app_id = strndup(optarg, strlen(optarg)+1);
 			break;
 		case 's':
 			if (!optarg) {
@@ -324,7 +337,18 @@ static enum run_rsml_cmd parse_cmd(int argc, char **argv,
 				exit(EXIT_FAILURE);
 			}
 			cmd = RESOURCED_RESTRICTION_STATE;
-			param->app_id = strdup(optarg);
+			free(param->app_id);
+			param->app_id = strndup(optarg, strlen(optarg)+1);
+			break;
+		case 'I':
+			if (!optarg) {
+				printf("Remove quota option requeres an argument.");
+				exit(EXIT_FAILURE);
+			}
+			param->imsi = strndup(optarg, strlen(optarg)+1);
+			break;
+		case 'B':
+			param->ground = RESOURCED_STATE_BACKGROUND;
 			break;
 		default:
 			printf("Unknown option %c\n", (char)retval);
@@ -342,28 +366,37 @@ static enum run_rsml_cmd parse_cmd(int argc, char **argv,
  */
 resourced_cb_ret data_usage_callback(const data_usage_info *info, void *user_data)
 {
+	execute_once {
+		printf("%*s|%16s|%16s|%10s|%10s|%10s|%10s|%3s|%3s|%10s|%20s...\n",
+		       user_data ? 3 : 20,
+		       user_data ? "ift" : "app_id",
+		       "from", "to", "fr_rx", "bg_rx",
+		       "fr_tx", "bg_tx", "rmg",
+		       "hnp", "ifname", "imsi");
+	}
+
 	/*TODO rewrite this hack*/
 	if (user_data)
-		printf("iftype %d\n", info->iftype);
+		printf("%3d|", info->iftype);
 	else
-		printf("%s\n", info->app_id ? info->app_id : UNKNOWN_APP);
+		printf("%20s|", info->app_id ? info->app_id : UNKNOWN_APP);
 
 	if (info->interval) {
-		char buf[28];
-
-		ctime_r(&info->interval->from, buf);
-		printf("%s\t", buf);
-		ctime_r(&info->interval->to, buf);
-		printf("%s\t", buf);
+		char s[20] = {0};
+		struct tm *l = localtime(&info->interval->from);
+		strftime(s, sizeof(s), "%a, %b %d %Y", l);
+		printf("%17s|", s);
+		l = localtime(&info->interval->to);
+		strftime(s, sizeof(s), "%a, %b %d %Y", l);
+		printf("%17s|", s);
 	} else
-		printf("<entire interval>\t");
+		printf("%35s|", "<entire interval>");
 
-	printf("%ld/%ld\t%ld/%ld/%u/%u/%s\n", info->foreground.cnt.incoming_bytes,
-	       info->background.cnt.incoming_bytes,
-	       info->foreground.cnt.outgoing_bytes,
-	       info->background.cnt.outgoing_bytes,
+	printf("%10ld|%10ld|%3u|%3u|%10s|%20s\n", info->cnt.incoming_bytes,
+	       info->cnt.outgoing_bytes,
 	       info->roaming, info->hw_net_protocol_type,
-	       info->ifname);
+	       info->ifname,
+	       info->imsi);
 	return RESOURCED_CONTINUE;
 }
 
@@ -378,23 +411,23 @@ resourced_cb_ret restriction_callback(const resourced_restriction_info *info,
 				      void *user_data)
 {
 	printf("appid: %s, iftype: %d, rst_state %d, rcv_limit %d, "
-	       "send_limit %d, roaming %d\n",
+	       "send_limit %d, roaming %d, quota_id %d\n",
 		info->app_id ? info->app_id : UNKNOWN_APP,
 	       info->iftype, info->rst_state,
-	       info->rcv_limit, info->send_limit, info->roaming);
+	       info->rcv_limit, info->send_limit, info->roaming, info->quota_id);
 	return RESOURCED_CONTINUE;
 }
 
 const char *state_representation[] = {
 	"UNDEFINDED",
 	"ACTIVATED",
-	"EXCLUDED",
 	"REMOVED",
+	"EXCLUDED",
 };
 
 const char *convert_restriction_state(network_restriction_state state) {
 	if (state <= NETWORK_RESTRICTION_UNDEFINDED
-		|| state >= NETWORK_RESTRICTION_MAX_VALUE) {
+		&& state >= NETWORK_RESTRICTION_MAX_VALUE) {
 		fprintf(stderr, "state not in range %d", state);
 		return NULL;
 	}
@@ -425,7 +458,14 @@ int main(int argc, char **argv)
 	case RESOURCED_APPLY:
 	{
 		int err = 0;
-		resourced_net_restrictions net_rst = {0,};
+		resourced_net_restrictions net_rst = {
+			.rs_type = param.ground,
+			.iftype = param.du_rule.iftype,
+			.roaming = param.roaming_type,
+			.imsi = param.imsi,
+			.send_limit = param.send_limit,
+			.rcv_limit = param.rcv_limit,
+		};
 
 		if (!param.du_rule.iftype) {
 			fprintf(stderr, "Apply restriction command requires -i\n");
@@ -443,10 +483,6 @@ int main(int argc, char **argv)
 
 		if (err)
 			return err;
-
-		net_rst.send_limit = param.send_limit;
-		net_rst.rcv_limit = param.rcv_limit;
-		net_rst.iftype = param.du_rule.iftype;
 
 		ret_code = set_net_restriction(param.app_id,
 						       &net_rst);
@@ -491,9 +527,16 @@ int main(int argc, char **argv)
 		}
 		break;
 	case RESOURCED_REVERT:
-		if (param.du_rule.iftype)
-			ret_code = remove_restriction_by_iftype(
-				param.app_id, param.du_rule.iftype);
+		if (param.du_rule.iftype) {
+			const resourced_net_restrictions rst = {
+				.rs_type = param.ground,
+				.iftype = param.du_rule.iftype,
+				.roaming = param.roaming_type,
+				.imsi = param.imsi,
+			};
+
+			ret_code = remove_restriction_full(param.app_id, &rst);
+		}
 		else
 			fprintf(stderr, "Revert restriction commands require -i\n");
 		if (ret_code != RESOURCED_ERROR_NONE)
@@ -518,20 +561,21 @@ int main(int argc, char **argv)
 	case RESOURCED_SET_QUOTA:
 	{
 		data_usage_quota quota = { 0 };
-		if (!param.du_rule.from || !param.du_rule.to) {
-			fprintf(stderr, "Quota command requires all of this options: "
-			       "--from, --to and --roaming\n");
-			break;
-		}
-
+		time_t quota_start_time = 0;
 		/* TODO in case of refactoring, use internal command line structure instead of public structure for holding param */
-		time_t quota_start_time = time(NULL);
-		quota.start_time = &quota_start_time;
+		if (param.du_rule.from)
+			quota.start_time = &param.du_rule.from;
+		else {
+			quota_start_time = time(NULL);
+			quota.start_time = &quota_start_time;
+		}
 		quota.snd_quota = param.send_limit;
 		quota.rcv_quota = param.rcv_limit;
 		quota.iftype = param.du_rule.iftype;
-		quota.time_period = param.du_rule.to - param.du_rule.from;
+		quota.time_period = param.du_rule.granularity;
 		quota.roaming_type =  param.roaming_type;
+		quota.imsi = param.imsi;
+		quota.quota_type = param.ground;
 		if (set_datausage_quota(param.app_id, &quota) !=
 		     RESOURCED_ERROR_NONE) {
 				fprintf(stderr, "Failed to apply quota!\n");
@@ -545,6 +589,8 @@ int main(int argc, char **argv)
 		rule.app_id = param.app_id;
 		rule.iftype = param.du_rule.iftype;
 		rule.roaming = param.roaming_type;
+		rule.imsi = param.imsi;
+		rule.quota_type = param.ground;
 
 		if (remove_datausage_quota(&rule) != RESOURCED_ERROR_NONE) {
 			fprintf(stderr, "Failed to remove quota!\n");

@@ -29,7 +29,7 @@
 
 #define SIGNAL_NAME_OOMADJ_SET		"OomadjSet"
 
-void dbus_proc_handler(char* type, char *buf)
+void dbus_proc_handler(char *type, char *buf)
 {
 	char *pa[3];
 	int ret;

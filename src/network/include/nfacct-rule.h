@@ -61,12 +61,29 @@ typedef enum {
 	NFACCT_COUNTER,
 	NFACCT_WARN,
 	NFACCT_BLOCK,
+	NFACCT_TETH_COUNTER,
 	NFACCT_RULE_LAST_ELEM,
 } nfacct_rule_intend;
 
+enum nfnl_acct_flags {
+        NFACCT_F_QUOTA_PKTS     = (1 << 0),
+        NFACCT_F_QUOTA_BYTES    = (1 << 1),
+        NFACCT_F_OVERQUOTA      = (1 << 2), /* can't be set from userspace */
+};
+
+/* it's better to have
+ * base nfacct_rule with following fields:
+ *  name, ifname, pid, classid, iftype, intend, carg, iptables_rule
+ *
+ *  and inherited nfacct_rule_counter and nfacct_rule_restriction
+ *  with additional field:
+ *	quota, quota_id, roaming, rst_state
+ *
+ * But ANSI C doesn't support inheritance.
+ */
 struct nfacct_rule {
 	char name[MAX_NAME_LENGTH];
-	char ifname[MAX_NAME_LENGTH];
+	char ifname[MAX_IFACE_LENGTH];
 
 	pid_t pid;
 	u_int32_t classid;
@@ -76,6 +93,9 @@ struct nfacct_rule {
 	struct counter_arg *carg;
 	resourced_ret_c(*iptables_rule)(struct nfacct_rule *counter);
 	u_int64_t quota;
+	int quota_id;
+	resourced_roaming_type roaming;
+	resourced_restriction_state rst_state;
 };
 
 struct counter_arg;
@@ -83,7 +103,11 @@ struct counter_arg;
 void generate_counter_name(struct nfacct_rule *counter);
 bool recreate_counter_by_name(char *cnt_name, struct nfacct_rule *counter);
 
-resourced_ret_c  nfacct_send_get(struct counter_arg *carg);
+resourced_ret_c nfacct_send_get_all(struct counter_arg *carg);
+resourced_ret_c nfacct_send_get_counters(struct counter_arg *carg,
+					 const char *name);
+resourced_ret_c nfacct_send_get(struct nfacct_rule *rule);
+resourced_ret_c nfacct_send_del(struct nfacct_rule *counter);
 resourced_ret_c nfacct_send_initiate(struct counter_arg *carg);
 
 resourced_ret_c exec_iptables_cmd(const char *cmd_buf, pid_t *pid);

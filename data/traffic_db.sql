@@ -9,10 +9,13 @@ CREATE TABLE IF NOT EXISTS statistics (
   is_roaming INT,
   hw_net_protocol_type INT,
   ifname TEXT,
-  PRIMARY KEY (binpath, time_stamp, iftype)
+  reserved TEXT,
+  imsi TEXT,
+  ground INT,
+  PRIMARY KEY (binpath, time_stamp, iftype, imsi)
 );
 
-CREATE INDEX IF NOT EXISTS binpath_st_idx ON statistics(binpath, iftype);
+CREATE INDEX IF NOT EXISTS binpath_st_idx ON statistics(binpath, iftype, imsi);
 
 CREATE TABLE IF NOT EXISTS quotas (
   binpath TEXT,
@@ -24,10 +27,13 @@ CREATE TABLE IF NOT EXISTS quotas (
   start_time BIGINT,
   iftype INT,
   roaming INT,
-  PRIMARY KEY(binpath, iftype, roaming)
+  reserved TEXT,
+  imsi TEXT,
+  ground INT,
+  PRIMARY KEY(binpath, iftype, roaming, imsi, ground)
 );
 
-CREATE INDEX IF NOT EXISTS binpath_qt_idx ON quotas(binpath, iftype);
+CREATE INDEX IF NOT EXISTS binpath_qt_idx ON quotas(binpath, iftype, imsi);
 
 CREATE TABLE IF NOT EXISTS effective_quotas (
   binpath TEXT,
@@ -38,10 +44,12 @@ CREATE TABLE IF NOT EXISTS effective_quotas (
   iftype INT,
   roaming INT,
   state INT DEFAULT 0,
-  PRIMARY KEY (binpath, iftype, start_time, finish_time, roaming)
+  reserved TEXT,
+  imsi TEXT,
+  PRIMARY KEY (binpath, iftype, start_time, finish_time, roaming, imsi)
 );
 
-CREATE INDEX IF NOT EXISTS binpath_effective_quotas_idx ON effective_quotas(binpath, iftype);
+CREATE INDEX IF NOT EXISTS binpath_effective_quotas_idx ON effective_quotas(binpath, iftype, imsi);
 
 CREATE TABLE IF NOT EXISTS restrictions (
   binpath TEXT,
@@ -51,16 +59,21 @@ CREATE TABLE IF NOT EXISTS restrictions (
   rst_state INT,
   quota_id INT,
   roaming INT,
-  PRIMARY KEY (binpath, iftype)
+  reserved TEXT,
+  ifname TEXT,
+  imsi TEXT,
+  PRIMARY KEY (binpath, iftype, ifname, quota_id, imsi)
 );
 
-CREATE INDEX IF NOT EXISTS binpath_restrictions_idx ON restrictions(binpath, iftype);
+CREATE INDEX IF NOT EXISTS binpath_restrictions_idx ON restrictions(binpath, iftype, ifname);
 
 CREATE TABLE IF NOT EXISTS iface_status (
   update_time BIGINT,
   iftype INT,
   ifstatus INT,
-  PRIMARY KEY (update_time)
+  reserved TEXT,
+  ifname TEXT,
+  PRIMARY KEY (update_time, iftype, ifstatus)
 );
 
 CREATE INDEX IF NOT EXISTS update_tm_if_idx ON iface_status(update_time, iftype, ifstatus);

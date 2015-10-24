@@ -36,6 +36,8 @@
 
 #include "resourced.h"
 
+#define PATH_TO_NET_CGROUP_DIR "/sys/fs/cgroup/net_cls"
+
 typedef GArray int_array;
 
 /**
@@ -66,12 +68,11 @@ char *get_app_id_by_classid(const u_int32_t classid, const bool update_state);
 u_int32_t get_classid_by_app_id(const char *app_id, int create);
 
 /**
- * @desc take classid from net_cls cgroup with name pkg_name
- * @param pkg_name - name of the cgroup
- * @param create - in case of true - create cgroup if it's not exists
- * @return classid
+ * @desc create cgroup, generate classid and put classid into cgroup
  */
-u_int32_t get_classid_by_pkg_name(const char *pkg_name, int create);
+resourced_ret_c make_net_cls_cgroup(const char *pkg_name, u_int32_t classid);
+
+resourced_ret_c place_pids_to_net_cgroup(const int pid, const char *pkg_name);
 
 /**
  * @desc Make net_cls cgroup and put in it the given pid and
@@ -82,5 +83,12 @@ u_int32_t get_classid_by_pkg_name(const char *pkg_name, int create);
  */
 resourced_ret_c make_net_cls_cgroup_with_pid(const int pid,
 	const char *pkg_name);
+
+struct counter_arg;
+/**
+ * @desc this function makes net_cls cgroup and put pids into it
+ * */
+void create_net_background_cgroup(struct counter_arg *carg);
+
 
 #endif	/*_RESOURCED_NET_CLS_CGROUP_H_*/

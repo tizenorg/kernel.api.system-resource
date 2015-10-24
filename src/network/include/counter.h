@@ -29,9 +29,10 @@
 
 #include "app-stat.h"
 #include "config.h"
-#include "daemon-options.h"
 
 #include <Ecore.h>
+
+#define RESOURCED_BACKGROUND_APP_NAME "BACKGROUND"
 
 struct counter_arg {
 	int sock;
@@ -46,13 +47,25 @@ struct counter_arg {
 	int noti_fd;
 	Ecore_Fd_Handler *noti_fd_handler;
 #endif
-	struct daemon_opts *opts;
+	int serialized_counters; /* number of counters which was serialized in
+				    current request */
+	struct net_counter_opts *opts;
 	struct application_stat_tree *result;
-	traffic_stat_tree *in_tree;
-	traffic_stat_tree *out_tree;
+	time_t last_run_time;
+	/* main timer for getting kernel counters */
 	Ecore_Timer *ecore_timer;
+	/* handler for kernel's fd for getting counters from ktgrabber/nfacct */
 	Ecore_Fd_Handler *ecore_fd_handler;
+	/* timer for separate obtaining values from kernel and store result into db */
 	Ecore_Timer *store_result_timer;
+	/* timer for reset old statistics */
+	Ecore_Timer *erase_timer;
+};
+
+struct net_counter_opts {
+	sig_atomic_t update_period;
+	sig_atomic_t flush_period;
+	sig_atomic_t state;
 };
 
 /**
@@ -62,7 +75,7 @@ struct counter_arg {
  */
 void reschedule_count_timer(const struct counter_arg *carg, const double delay);
 
-struct counter_arg *init_counter_arg(struct daemon_opts *opts);
+struct counter_arg *init_counter_arg(struct net_counter_opts *opts);
 
 void finalize_carg(struct counter_arg *carg);
 

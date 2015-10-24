@@ -33,9 +33,9 @@ struct shared_modules_data *get_shared_modules_data(void)
 	return &modules_data;
 }
 
-void init_modules_arg(struct modules_arg *marg, struct daemon_arg *darg)
+void init_modules_arg(struct daemon_arg *darg)
 {
-	ret_msg_if(marg == NULL || darg == NULL,
-			 "Init modules argument failed\n");
-	marg->opts = darg->opts;
+	ret_msg_if(darg == NULL,
+		   "Init modules argument failed\n");
+	modules_data.darg = darg;
 }

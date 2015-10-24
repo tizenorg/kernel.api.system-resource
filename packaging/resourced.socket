@@ -1,0 +1,8 @@
+[Unit]
+Description=Resourced socket
+
+[Socket]
+ListenStream=/tmp/resourced
+SocketMode=0777
+SmackLabelIPIn=*
+SmackLabelIPOut=@

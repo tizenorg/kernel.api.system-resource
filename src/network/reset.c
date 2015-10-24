@@ -44,11 +44,14 @@
 #define RESET_APP_IFACE "delete from statistics where binpath=? and " \
 	"iftype=? and time_stamp between ? and ?"
 
+#define RESET_FIRST_BY_NUMBER "delete from statistics where time_stamp in " \
+       "(select time_stamp from statistics desc limit ?)"
+
 /* the following array is strictly ordered
  * to find required statement the following code will be used:
  * (app ? 1 : 0) | (iftype ? 2 : 0)
  */
-static sqlite3_stmt *reset_stms[4];
+static sqlite3_stmt *reset_stms[5];
 
 #define PREPARE(stm, query) do {				\
 	rc = sqlite3_prepare_v2(db, query, -1, &stm, NULL);	\
@@ -73,6 +76,7 @@ static int init_datausage_reset(sqlite3 *db)
 	PREPARE(reset_stms[1], RESET_APP);
 	PREPARE(reset_stms[2], RESET_IFACE);
 	PREPARE(reset_stms[3], RESET_APP_IFACE);
+	PREPARE(reset_stms[4], RESET_FIRST_BY_NUMBER);
 
 	initialized = 1;
 	return rc;
@@ -92,6 +96,33 @@ void finalize_datausage_reset(void)
 	for (i = 0; i < sizeof(reset_stms) / sizeof(*reset_stms); i++)
 		FINALIZE(reset_stms[i]);
 }
+
+API resourced_ret_c reset_data_usage_first_n_entries(int num)
+{
+	resourced_ret_c result = RESOURCED_ERROR_NONE;
+
+	ret_value_msg_if (!num, RESOURCED_ERROR_INVALID_PARAMETER,
+			"Invalid number of entries");
+	libresourced_db_initialize_once();
+
+	if (init_datausage_reset(resourced_get_database()) != SQLITE_OK) {
+		_D("Failed to initialize data usage reset statements: %s\n",
+		   sqlite3_errmsg(resourced_get_database()));
+		return RESOURCED_ERROR_DB_FAILED;
+	}
+	if (sqlite3_bind_int(reset_stms[4], 1, num) != SQLITE_OK) {
+		result = RESOURCED_ERROR_DB_FAILED;
+		goto out;
+	}
+	if (sqlite3_step(reset_stms[4]) != SQLITE_DONE) {
+		_D("Failed to drop collected statistics.");
+		result = RESOURCED_ERROR_DB_FAILED;
+	}
+out:
+	sqlite3_reset(reset_stms[4]);
+	return result;
+}
+
 
 API resourced_ret_c reset_data_usage(const data_usage_reset_rule *rule)
 {

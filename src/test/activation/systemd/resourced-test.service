@@ -1,0 +1,10 @@
+[Unit]
+Description=Start the test service
+Requires=dbus.socket
+After=dbus.socket
+
+[Service]
+Type=dbus
+BusName=org.tizen.system.ResourcedTest
+ExecStart=/usr/bin/resourced-test
+KillSignal=SIGUSR1

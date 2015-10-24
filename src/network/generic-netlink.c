@@ -53,52 +53,9 @@
 #define NESTED_MCAST_MAX       256
 #define MAX_PAYLOAD 1024	/* maximum payload size */
 
-/**
- * @desc accepts opaque pointer
- * extracts command id
- */
-inline int netlink_get_command(struct genl *nl_ans)
-{
-	return nl_ans->g.cmd;
-}
-
 uint32_t netlink_get_family(struct genl *nl_ans)
 {
 	return nl_ans->n.nlmsg_type;
-}
-
-static void fill_traf_stat_list(char *buffer, __u16 count,
-			traffic_stat_tree *stats)
-{
-	struct traffic_event *cur = (struct traffic_event *)buffer;
-
-	while (count) {
-		struct traffic_stat *to_insert;
-		struct classid_iftype_key *key;
-
-		to_insert = g_new(struct traffic_stat, 1);
-		if (!to_insert) {
-			_D("Can't allocate %d bytes for traffic_stat\n", sizeof(struct traffic_stat));
-			return;
-		}
-
-		key = g_new(struct classid_iftype_key, 1);
-
-		if (!key) {
-			_D("Can't allocate %d bytes for classid_iftype_key\n", sizeof(struct classid_iftype_key));
-			g_free((gpointer)to_insert);
-			return;
-		}
-
-		to_insert->bytes = cur->bytes;
-		to_insert->ifindex = cur->ifindex;
-		key->classid = cur->sk_classid ?
-			cur->sk_classid : RSML_UNKNOWN_CLASSID;
-		key->iftype = get_iftype(cur->ifindex);
-		g_tree_insert((GTree *) stats, (gpointer)key, to_insert);
-		--count;
-		++cur;
-	}
 }
 
 /*
@@ -471,70 +428,6 @@ int send_restriction(int sock, const pid_t pid, const int family_id,
 		   (struct sockaddr *)&nladdr, sizeof(nladdr));
 	_D("Restriction send to kernel, result: %d", r);
 	return r;
-}
-
-static void _process_answer(struct netlink_serialization_params *params)
-{
-	struct genl *nl_ans = params->ans;
-	traffic_stat_tree *stats = params->stat_tree;
-	ssize_t remains;
-	char *buffer;
-	struct nlattr *first_na, *second_na;
-	int first_len;
-	int count = 0;
-
-	remains = GENLMSG_PAYLOAD(&nl_ans->n);
-	if (remains <= 0)
-		return;
-
-	/* parse reply message */
-	first_na = (struct nlattr *)GENLMSG_DATA(nl_ans);
-
-	/* inline nla_next() */
-	first_len = NLA_ALIGN(first_na->nla_len);
-
-	second_na = (struct nlattr *) ((char *) first_na + first_len);
-	remains -= first_len;
-
-	/* but we need data_attr->nla_len */
-	buffer = (char *) malloc((size_t)remains);
-	if (buffer == NULL)
-		return;
-
-	if (first_na->nla_type == TRAF_STAT_COUNT) {
-		count = *(__u16 *) NLA_DATA(first_na);
-		memcpy(buffer, (char *) NLA_DATA(second_na),
-		       second_na->nla_len);
-	} else {
-		_D("Expected attribute %d got %d", TRAF_STAT_COUNT, first_na->nla_type);
-	}
-
-	if (count > 0)
-		fill_traf_stat_list(buffer, count, stats);
-	free(buffer);
-
-}
-
-netlink_serialization_command *netlink_create_command(
-	struct netlink_serialization_params *params)
-{
-	static netlink_serialization_command command = {0,};
-	const int netlink_command = netlink_get_command(params->ans);
-
-	command.params = *params;
-
-	if (netlink_command == TRAF_STAT_C_GET_CONN_IN) {
-		command.deserialize_answer = _process_answer;
-		command.params.stat_tree = params->carg->in_tree;
-	} else if (netlink_command == TRAF_STAT_C_GET_PID_OUT) {
-		command.deserialize_answer = _process_answer;
-		command.params.stat_tree = params->carg->out_tree;
-	} else {
-		_E("Unknown command!");
-		return NULL;
-	}
-
-	return &command;
 }
 
 resourced_ret_c process_netlink_restriction_msg(const struct genl *ans,

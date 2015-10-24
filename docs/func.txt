@@ -272,9 +272,9 @@ int datausage_quota_init(sqlite3 *db)
 Initializes queries used in data usage quota functions.
 
 --------------------------------------------------------------------------------
-u_int32_t get_classid_by_pkg_name(const char *pkg_name, int create)
+u_int32_t get_classid_by_app_id(const char *pkg_name, int create)
 
-Converts application package name to network class.
+Converts application id to network class.
 
 pkg_name - zero-terminated string containing the package name
 create - if non-zero attempts to create the cgroup for pkg_name before fetching network class ID

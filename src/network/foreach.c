@@ -35,70 +35,97 @@
 
 #define DATA_USAGE_FOR_PERIOD "select binpath, hw_net_protocol_type, "	\
 	"is_roaming, sum(received) as received, "			\
-	"sum(sent) as sent from statistics where time_stamp between ? and ? " \
-	"group by binpath, is_roaming order by received desc"
+	"sum(sent) as sent, imsi, ground from statistics "			\
+	"where time_stamp between ? and ? " \
+	"group by ground, binpath, is_roaming, imsi order by received desc"
 
 #define DATA_USAGE_FOR_PERIOD_IFACE "select binpath, hw_net_protocol_type, " \
 	"is_roaming, sum(received) as received, "			\
-	"sum(sent) as sent from statistics where time_stamp between ? and ? " \
-	"and iftype=? group by binpath, is_roaming order by received desc"
+	"sum(sent) as sent, imsi, ground from statistics "			\
+	"where time_stamp between ? and ? " \
+	"and iftype=? group by ground, binpath, is_roaming, imsi order by received desc"
 
 #define DATA_USAGE_CHUNKS "select binpath, hw_net_protocol_type, "	\
 	"is_roaming, sum(received) as received, "			\
-	"sum(sent) as sent, time_stamp - time_stamp % ? as time_stamp " \
+	"sum(sent) as sent, time_stamp - time_stamp % ? as time_stamp, imsi, "\
+	"ground " \
 	"from statistics where time_stamp between ? and ? " \
-	"group by binpath, time_stamp order by time_stamp"
+	"group by ground, binpath, time_stamp, imsi order by time_stamp"
 
 #define DATA_USAGE_CHUNKS_IFACE "select binpath, hw_net_protocol_type, " \
 	"is_roaming, sum(received) as received, "			\
-	"sum(sent) as sent, time_stamp as start_time, "			\
+	"sum(sent) as sent, imsi, ground, "			\
 	"time_stamp - time_stamp % ? as time_stamp " \
 	"from statistics where time_stamp between ? and ? and iftype=?" \
-	"group by binpath, time_stamp order by time_stamp"
+	"group by ground, binpath, time_stamp, imsi order by time_stamp"
 
 #define DATA_USAGE_APP_DETAILS "select iftype, hw_net_protocol_type, "	\
 	"is_roaming, sum(received) as received, sum(sent) as sent, "	\
-	"ifname from statistics where time_stamp between ? and ? " \
-	"and binpath=? group by binpath, iftype, is_roaming order by iftype"
+	"ifname, imsi, ground from statistics where time_stamp between ? and ? " \
+	"and binpath=? " \
+	"group by binpath, iftype, ifname, imsi, hw_net_protocol_type, " \
+	"is_roaming " \
+	"order by time_stamp, binpath, iftype, ifname, imsi, " \
+	"hw_net_protocol_type, is_roaming"
 
 #define DATA_USAGE_APP_DETAILS_IFACE "select iftype, hw_net_protocol_type, " \
 	"is_roaming, sum(received) as received, sum(sent) as sent, "	\
-	"ifname from statistics where time_stamp between ? and ? " \
-	"and binpath=? and iftype=?"
+	"ifname, imsi, ground from statistics where time_stamp between ? and ? " \
+	"and binpath=? and iftype=?" \
+	"group by hw_net_protocol_type, is_roaming, iftype, ifname, imsi " \
+	"order by time_stamp, hw_net_protocol_type, is_roaming, iftype, "\
+	"ifname, imsi"
 
 #define DATA_USAGE_CHUNKS_APP "select iftype, hw_net_protocol_type, "	\
 	"is_roaming, sum(received) as received, sum(sent) as sent, "	\
-	"ifname, time_stamp - time_stamp % ? as time_stamp " \
-	"from statistics where time_stamp between ? and ? and binpath = ? " \
-	"group by iftype, time_stamp order by time_stamp, iftype"
+	"ifname, imsi, ground, time_stamp - time_stamp % ? as time_stamp " \
+	"from statistics " \
+	"group by iftype, ifname, time_stamp, hw_net_protocol_type, is_roaming " \
+	"order by time_stamp, iftype, ifname, hw_net_protocol_type, is_roaming"
 
 #define DATA_USAGE_CHUNKS_APP_IFACE "select iftype, hw_net_protocol_type, " \
 	"is_roaming, sum(received) as received, sum(sent) as sent, "	\
-	"ifname, time_stamp - time_stamp % ? as time_stamp " \
+	"ifname, imsi, ground, time_stamp - time_stamp % ? as time_stamp " \
 	"from statistics where time_stamp between ? and ? and binpath = ? " \
-	"and iftype = ? group by time_stamp order by time_stamp"
+	"and iftype = ? " \
+	"group by time_stamp, hw_net_protocol_type, is_roaming, " \
+	"iftype, ifname, imsi " \
+	"order by time_stamp, iftype, ifname, imsi, hw_net_protocol_type, " \
+	"is_roaming"
 
 #define DATA_USAGE_TOTAL "select iftype, hw_net_protocol_type, "	\
 	"is_roaming, sum(received) as received, sum(sent) as sent, "	\
-	"ifname from statistics where time_stamp between ? and ? " \
-	"group by iftype order by iftype, is_roaming"
+	"ifname, imsi, ground from statistics where time_stamp between ? and ? " \
+	"group by iftype, ifname, imsi, hw_net_protocol_type, is_roaming " \
+	"order by time_stamp, iftype, ifname, imsi, hw_net_protocol_type, " \
+	"is_roaming"
 
 #define DATA_USAGE_TOTAL_IFACE "select iftype, hw_net_protocol_type, "	\
 	"is_roaming, sum(received) as received, sum(sent) as sent, "	\
-	"ifname from statistics where time_stamp between ? and ? " \
-	"and iftype=?"
+	"ifname, imsi, ground from statistics where time_stamp between ? and ? " \
+	"and iftype=? " \
+	"group by hw_net_protocol_type, is_roaming, " \
+	"iftype, ifname, imsi " \
+	"order by time_stamp, iftype, ifname, imsi, hw_net_protocol_type, " \
+	"is_roaming"
 
 #define DATA_USAGE_CHUNKS_TOTAL "select iftype, hw_net_protocol_type, "	\
 	"is_roaming, sum(received) as received, sum(sent) as sent, "	\
-	"ifname, time_stamp - time_stamp % ? as time_stamp " \
+	"ifname, imsi, ground, time_stamp - time_stamp % ? as time_stamp " \
 	"from statistics where time_stamp between ? and ? "		\
-	"group by iftype, time_stamp order by time_stamp, iftype"
+	"group by time_stamp, iftype, ifname, imsi, hw_net_protocol_type, " \
+	"is_roaming " \
+	"order by time_stamp, iftype, ifname, imsi, hw_net_protocol_type, " \
+	"is_roaming"
 
 #define DATA_USAGE_CHUNKS_TOTAL_IFACE "select iftype, hw_net_protocol_type, " \
 	"is_roaming, sum(received) as received, sum(sent) as sent, "	\
-	"ifname, time_stamp - time_stamp % ? as time_stamp " \
+	"ifname, imsi, ground, time_stamp - time_stamp % ? as time_stamp " \
 	"from statistics where time_stamp between ? and ? "		\
-	"and iftype = ? group by time_stamp order by time_stamp"
+	"and iftype = ? " \
+	"group by time_stamp, hw_net_protocol_type, is_roaming, iftype, ifname, imsi " \
+	"order by time_stamp, hw_net_protocol_type, is_roaming, iftype, " \
+	"ifname, imsi"
 
 static sqlite3_stmt *data_usage_for_period;
 static sqlite3_stmt *data_usage_for_period_iface;
@@ -185,7 +212,6 @@ API resourced_ret_c data_usage_foreach(const data_usage_selection_rule *rule,
 	data_usage_info data;
 	sqlite3_stmt *stm;
 	resourced_ret_c result = RESOURCED_ERROR_NONE;
-	resourced_counters *cnt = &data.foreground.cnt;
 	int rc;
 	int pos = 1;/* running through positions where to
 		bind parameters in the query */
@@ -197,7 +223,6 @@ API resourced_ret_c data_usage_foreach(const data_usage_selection_rule *rule,
 		   sqlite3_errmsg(resourced_get_database()));
 		return RESOURCED_ERROR_DB_FAILED;
 	}
-
 
 	memset(&data, 0, sizeof(data));
 
@@ -245,10 +270,12 @@ API resourced_ret_c data_usage_foreach(const data_usage_selection_rule *rule,
 			data.app_id = (char *)sqlite3_column_text(stm, 0);
 			data.hw_net_protocol_type = sqlite3_column_int(stm, 1);
 			data.roaming = sqlite3_column_int(stm, 2);
-			cnt->incoming_bytes = sqlite3_column_int64(stm, 3);
-			cnt->outgoing_bytes = sqlite3_column_int64(stm, 4);
+			data.ground = sqlite3_column_int(stm, 6);
+			data.cnt.incoming_bytes = sqlite3_column_int64(stm, 3);
+			data.cnt.outgoing_bytes = sqlite3_column_int64(stm, 4);
+			data.imsi = (char *)sqlite3_column_text(stm, 5);
 			if (rule->granularity) {
-				interval.from = sqlite3_column_int64(stm, 5);
+				interval.from = sqlite3_column_int64(stm, 7);
 				interval.to = interval.from + rule->granularity;
 			}
 
@@ -286,8 +313,10 @@ static sqlite3_stmt **details_stms[] = {
 static sqlite3_stmt *select_statement(const char *app_id,
 	const data_usage_selection_rule *rule)
 {
-	return *details_stms[is_iftype_defined(rule->iftype) |
-	(app_id ? 0 : 2) | (rule->granularity ? 4 : 0)];
+	const int stm_index = is_iftype_defined(rule->iftype) |
+	(app_id ? 0 : 2) | (rule->granularity ? 4 : 0);
+	_D("stm index %d", stm_index);
+	return *details_stms[stm_index];
 }
 
 API resourced_ret_c data_usage_details_foreach(const char *app_id,
@@ -297,7 +326,6 @@ API resourced_ret_c data_usage_details_foreach(const char *app_id,
 	data_usage_info data;
 	sqlite3_stmt *stm;
 	resourced_ret_c result = RESOURCED_ERROR_NONE;
-	resourced_counters *cnt = &data.foreground.cnt;
 	int rc;
 	int pos = 1;/* running through positions
 		 where to bind parameters in the query */
@@ -360,16 +388,15 @@ API resourced_ret_c data_usage_details_foreach(const char *app_id,
 			data.iftype = sqlite3_column_int(stm, 0);
 			data.hw_net_protocol_type = sqlite3_column_int(stm, 1);
 			data.roaming = sqlite3_column_int(stm, 2);
-			cnt->incoming_bytes = sqlite3_column_int64(stm, 3);
-			cnt->outgoing_bytes = sqlite3_column_int64(stm, 4);
+			data.cnt.incoming_bytes = sqlite3_column_int64(stm, 3);
+			data.cnt.outgoing_bytes = sqlite3_column_int64(stm, 4);
 			data.ifname = (char *)sqlite3_column_text(stm, 5);
+			data.imsi = (char *)sqlite3_column_text(stm, 6);
 
 			if (rule->granularity) {
-				interval.from = sqlite3_column_int64(stm, 6);
+				interval.from = sqlite3_column_int64(stm, 7);
 				interval.to = interval.from + rule->granularity;
 			}
-			data.app_id = (char *)sqlite3_column_text(stm, 0);
-
 
 			if (info_cb(&data, user_data) == RESOURCED_CANCEL)
 				rc = SQLITE_DONE; /* emulate end of data */

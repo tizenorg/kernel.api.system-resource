@@ -33,69 +33,202 @@
 #include "const.h"
 #include "resourced.h"
 #include "trace.h"
-#include "proc-main.h"
 #include "cgroup.h"
-#include "proc-process.h"
+#include "procfs.h"
 #include "macro.h"
+#include "util.h"
 #include "config-parser.h"
 #include "file-helper.h"
+#include "storage-helper.h"
+#include "systemd-util.h"
+#include "notifier.h"
 #include "module.h"
 #include "module-data.h"
 #include "vip-process.h"
 
 #define VIP_CONF_FILE	  	"/etc/resourced/vip-process.conf"
-#define VIP_CONF_SECTION	"VIP_PROCESS"
-#define VIP_CONF_NAME	  	"VIP_PROC_NAME"
-#define AGENT_PATH	  	"/usr/bin/vip-release-agent"
-#define VIP_RELEASE_AGENT	"/release_agent"
-#define VIP_NOTIFY_ON_RELEASE	"/notify_on_release"
 
+static char **arg_vip_proc_names = NULL;
+static char **arg_vip_systemd_services = NULL;
 
-static int load_vip_config(struct parse_result *result, void *user_data)
+static int vip_parse_config_file(void)
 {
-	pid_t pid = 0;
-	char cgroup_name[MAX_NAME_LENGTH];
-	if (!result)
-		return -EINVAL;
+	const ConfigTableItem items[] = {
+		{ "VIP_PROCESS",	"VIP_PROC_NAME",
+		  config_parse_strv,	0,	&arg_vip_proc_names	  },
+		{ "VIP_PROCESS",	"VIP_SYSTEMD_SERVICE",
+		  config_parse_strv,	0,	&arg_vip_systemd_services },
+		{ NULL,			NULL,
+		  NULL,			0,	NULL			  }
+	};
 
-	if (strcmp(result->section, VIP_CONF_SECTION))
-		return RESOURCED_ERROR_NONE;
+	return config_parse_new(VIP_CONF_FILE, (void*) items);
+}
 
-	if (!strcmp(result->name, VIP_CONF_NAME)) {
-		/* 1. find pid */
-		/* 2. decrease oom score adj for excepting it in oom candidate list */
-		/* 3. make cgroup */
-		pid =  find_pid_from_cmdline(result->value);
-		if (pid) {
-			make_cgroup_subdir(VIP_CGROUP, result->value, NULL);
-			snprintf(cgroup_name, sizeof(cgroup_name), "%s/%s",
-				    VIP_CGROUP, result->value);
-			cgroup_write_node(cgroup_name, TASK_FILE_NAME, pid);
+static int vip_create_sub_cgroup(const char *name, pid_t pid)
+{
+	_cleanup_free_ char *cgroup_name = NULL;
+	bool already;
+	int r;
+	char buf[256];
+
+	assert(name);
+	assert(pid);
+
+	r = make_cgroup_subdir(VIP_CGROUP, name, &already);
+	if (r < 0) {
+		_E("failed to create vip sub dir");
+		return r;
+	}
+
+	if (already) {
+		_D("PID(%d) is already registered as VIP sub cgroup(%s)",
+		   pid, name);
+		return 0;
+	}
+
+	r = asprintf(&cgroup_name, "%s/%s", VIP_CGROUP, name);
+	if (r < 0) {
+		_E("failed to allocate memory");
+		return -ENOMEM;
+	}
+
+	r = cgroup_write_node(cgroup_name, TASK_FILE_NAME, pid);
+	if (r < 0) {
+		_E("failed to write pid '%d' to '%s': %s",
+		   pid, cgroup_name, strerror_r(-r, buf, sizeof(buf)));
+		return r;
+	}
+
+	_D("PID(%d) is registered as VIP sub cgroup(%s)", pid, name);
+
+	return 0;
+}
+
+static void vip_create_proc_name_groups(void)
+{
+	char **pname = NULL;
+	int r;
+
+	if (!arg_vip_proc_names)
+		return;
+
+	FOREACH_STRV(pname, arg_vip_proc_names) {
+		pid_t pid = 0;
+
+		pid = find_pid_from_cmdline(*pname);
+		if (pid > 0) {
+			r = vip_create_sub_cgroup(*pname, pid);
+			if (r < 0)
+				_E("failed to create "
+				   "sub cgroup of '%s', ignoring", *pname);
+		} else
+			_D("failed to find pid of name: %s", *pname);
+	}
+}
+
+static void vip_create_systemd_service_groups(void)
+{
+	char **pname = NULL;
+
+	if (!arg_vip_systemd_services)
+		return;
+
+	FOREACH_STRV(pname, arg_vip_systemd_services) {
+		_cleanup_free_ char *err_msg = NULL;
+		unsigned int u = 0;
+		int r;
+
+		r = systemd_get_service_property_as_uint32(*pname,
+							  "ExecMainPID",
+							  &u,
+							  &err_msg);
+		if (r < 0 || !u) {
+			_E("failed to get ExecMainPid of "
+			   "'%s' systemd service: %s", *pname, err_msg);
+			continue;
+		}
+
+		if (u > 0) {
+			r = vip_create_sub_cgroup(*pname, (pid_t)u);
+			if (r < 0)
+				_E("failed to create "
+				   "sub cgroup of '%s', ignoring", *pname);
 		}
 	}
-	return RESOURCED_ERROR_NONE;
+}
+
+static int vip_booting_done(void *data)
+{
+	vip_create_proc_name_groups();
+	vip_create_systemd_service_groups();
+
+	return 0;
 }
 
 static int resourced_vip_process_init(void *data)
 {
-	int checkfd;
-	checkfd = open(CHECK_RELEASE_PROGRESS, O_RDONLY, 0666);
-	if (checkfd >= 0)
-	{
-		if (unlink(CHECK_RELEASE_PROGRESS) < 0)
-			_E("fail to remove %s file\n", CHECK_RELEASE_PROGRESS);
-		close(checkfd);
+	_cleanup_close_ int checkfd = -1;
+	int r;
+	char buf[256];
+
+	r = access(CHECK_RELEASE_PROGRESS, F_OK);
+	if (r == 0) {
+		r = unlink(CHECK_RELEASE_PROGRESS);
+		if (r < 0)
+			_E("failed to remove %s: %m", CHECK_RELEASE_PROGRESS);
 	}
-	make_cgroup_subdir(DEFAULT_CGROUP, "vip", NULL);
-	mount_cgroup_subsystem("vip_cgroup", VIP_CGROUP, "none,name=vip_cgroup");
-	cgroup_write_node_str(VIP_CGROUP, VIP_RELEASE_AGENT, AGENT_PATH);
-	cgroup_write_node(VIP_CGROUP, VIP_NOTIFY_ON_RELEASE , 1);
-	config_parse(VIP_CONF_FILE, load_vip_config, NULL);
+
+	r = vip_parse_config_file();
+	if (r < 0) {
+		_E("failed to parse vip config file: %s", strerror_r(-r, buf, sizeof(buf)));
+		return RESOURCED_ERROR_FAIL;
+	}
+
+	if (!arg_vip_proc_names)
+		return RESOURCED_ERROR_NONE;
+
+	if (!is_mounted(VIP_CGROUP)) {
+		r = make_cgroup_subdir(DEFAULT_CGROUP, "vip", NULL);
+		if (r < 0) {
+			_E("failed to make vip cgroup");
+			return RESOURCED_ERROR_FAIL;
+		}
+
+		r = mount_cgroup_subsystem("vip_cgroup", VIP_CGROUP,
+					   "none,name=vip_cgroup");
+		if (r < 0) {
+			_E("failed to mount vip cgroup: %m");
+			return RESOURCED_ERROR_FAIL;
+		}
+
+		r = set_release_agent("vip", "/usr/bin/vip-release-agent");
+		if (r < 0) {
+			_E("failed to set vip release agent: %s", strerror_r(-r, buf, sizeof(buf)));
+			return RESOURCED_ERROR_FAIL;
+		}
+	}
+
+	vip_create_proc_name_groups();
+	vip_create_systemd_service_groups();
+
+	r = register_notifier(RESOURCED_NOTIFIER_BOOTING_DONE,
+			      vip_booting_done);
+	if (r < 0) {
+		_E("failed to register notifier BootingDone");
+		return RESOURCED_ERROR_FAIL;
+	}
+
 	return RESOURCED_ERROR_NONE;
 }
 
 static int resourced_vip_process_finalize(void *data)
 {
+	strv_free_full(arg_vip_proc_names);
+	strv_free_full(arg_vip_systemd_services);
+
+	unregister_notifier(RESOURCED_NOTIFIER_BOOTING_DONE, vip_booting_done);
+
 	return RESOURCED_ERROR_NONE;
 }
 

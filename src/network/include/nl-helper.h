@@ -98,7 +98,7 @@ struct genl {
 };
 
 struct netlink_serialization_params {
-	traffic_stat_tree *stat_tree;
+	int direction;
 	struct genl *ans;
 	struct counter_arg *carg;
 	int (*eval_attr)(struct rtattr *attr_list[__NFACCT_MAX],

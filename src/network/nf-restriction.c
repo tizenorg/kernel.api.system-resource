@@ -34,12 +34,23 @@
 #include "netlink-restriction.h"
 #include "nfacct-rule.h"
 #include "resourced.h"
+#include "restriction-helper.h"
+#include "telephony.h"
 #include "trace.h"
 
 static resourced_ret_c apply_net_restriction(struct nfacct_rule *rule,
 			const int send_limit, const int rcv_limit)
 {
-	nfacct_rule_jump jump = rule->intend == NFACCT_WARN ? NFACCT_JUMP_ACCEPT :
+	nfacct_rule_jump jump;
+
+	/* block immediately */
+	if (!rcv_limit) { /* for dual nfacct entity for restriction add || !send_limit */
+		return produce_net_rule(rule, 0, 0,
+			NFACCT_ACTION_INSERT, NFACCT_JUMP_REJECT,
+			NFACCT_COUNTER_OUT);
+	}
+
+	jump = rule->intend == NFACCT_WARN ? NFACCT_JUMP_ACCEPT :
 			NFACCT_JUMP_REJECT;
 
 	return produce_net_rule(rule, send_limit, rcv_limit,
@@ -78,11 +89,12 @@ static resourced_ret_c exclude_net_restriction(struct nfacct_rule *rule)
 }
 
 resourced_ret_c send_net_restriction(const enum traffic_restriction_type rst_type,
-			 const u_int32_t classid,
+			 const u_int32_t classid, const int quota_id,
 			 const resourced_iface_type iftype,
 			 const int send_limit, const int rcv_limit,
 			 const int snd_warning_threshold,
-			 const int rcv_warning_threshold)
+			 const int rcv_warning_threshold,
+			 const char *ifname)
 {
 	int ret;
 	struct shared_modules_data *m_data = get_shared_modules_data();
@@ -90,8 +102,10 @@ resourced_ret_c send_net_restriction(const enum traffic_restriction_type rst_typ
 	struct nfacct_rule rule = {
 		.name = {0},
 		.ifname = {0},
-		0,
+		.quota_id = quota_id,
 	};
+
+	rule.rst_state = convert_to_restriction_state(rst_type);
 
 	ret_value_msg_if(m_data == NULL, RESOURCED_ERROR_FAIL, "Empty shared modules data");
 
@@ -102,10 +116,12 @@ resourced_ret_c send_net_restriction(const enum traffic_restriction_type rst_typ
 	rule.classid = classid;
 	rule.iftype = iftype;
 	rule.carg = carg;
+	rule.roaming = get_current_roaming();
+	STRING_SAVE_COPY(rule.ifname, ifname);
 
 	if (rst_type == RST_SET) {
-		if (snd_warning_threshold ||
-			rcv_warning_threshold) {
+		/* snd_warning_threshold && */
+		if (rcv_warning_threshold) {
 			rule.intend = NFACCT_WARN;
 			ret = apply_net_restriction(&rule,
 				snd_warning_threshold, rcv_warning_threshold);

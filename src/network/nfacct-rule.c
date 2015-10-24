@@ -36,6 +36,7 @@
 
 #include "const.h"
 #include "counter.h"
+#include "datausage-common.h"
 #include "iface.h"
 #include "macro.h"
 #include "module-data.h"
@@ -53,21 +54,22 @@
 #define NFACCT_NAME_MOD " -m nfacct --nfacct-name %s"
 #define REJECT_RULE " -j REJECT"
 #define ACCEPT_RULE " -j ACCEPT"
+#define OUT_RULE "OUTPUT"
+#define IN_RULE "INPUT"
+#define FORWARD_RULE "FORWARD"
 
 /* TODO idea to use the same rule both for BLOCK (REJECT) and WARNING (ACCEPT) */
 #define RULE_APP_OUT "%s -w %s OUTPUT -o %s -m cgroup --cgroup %u %s %s"
 #define RULE_APP_IN "%s -w %s INPUT -i %s -m cgroup --cgroup %u %s %s"
 
-#define RULE_IFACE_OUT "%s -w %s OUTPUT -o %s %s -m cgroup ! --cgroup 0 %s"
-#define RULE_IFACE_IN "%s -w %s INPUT -i %s %s -m cgroup ! --cgroup 0 %s"
+
+/* iptables -w [I/A/D] [OUTPUT/FORWARD/INPUT] -o/-i iface -m nfacct --nfacct-name name -j ACCEPT/REJECT */
+
+#define RULE_IFACE_OUT "%s -w %s %s -o %s %s %s"
+#define RULE_IFACE_IN "%s -w %s %s -i %s %s  %s"
+
 
 #define NFNL_SUBSYS_ACCT                7
-
-enum nfnl_acct_flags {
-        NFACCT_F_QUOTA_PKTS     = (1 << 0),
-        NFACCT_F_QUOTA_BYTES    = (1 << 1),
-        NFACCT_F_OVERQUOTA      = (1 << 2), /* can't be set from userspace */
-};
 
 static void prepare_netlink_msg(struct genl *req, int type, int flag)
 {
@@ -161,29 +163,69 @@ static resourced_ret_c nfacct_send_new(struct nfacct_rule *counter)
 	return send_nfacct_request(counter->carg->sock, &req);
 }
 
-static resourced_ret_c nfacct_send_del(struct nfacct_rule *counter)
+resourced_ret_c nfacct_send_del(struct nfacct_rule *counter)
 {
 	struct genl req;
 
+#ifdef DEBUG_ENABLED
+	_D("send remove request for %s", counter->name);
+#endif
 	prepare_netlink_msg(&req, NFNL_MSG_ACCT_DEL, NLM_F_ACK);
 	add_string_attr(&req, counter->name, NFACCT_NAME);
 	return send_nfacct_request(counter->carg->sock, &req);
 }
 #define NFACCT_F_QUOTAS (NFACCT_F_QUOTA_BYTES | NFACCT_F_QUOTA_PKTS)
-resourced_ret_c nfacct_send_get(struct counter_arg *carg)
+
+static resourced_ret_c internal_nfacct_send_get(struct counter_arg *carg,
+		enum nfnl_acct_msg_types get_type, const char *name,
+		int mask, int filter)
 {
 	struct genl req;
 	struct nlattr *na;
-	prepare_netlink_msg(&req, NFNL_MSG_ACCT_GET_CTRZERO,
-		NLM_F_DUMP);
+	int flag = !name ? NLM_F_DUMP : 0;
+	prepare_netlink_msg(&req, get_type,
+		flag);
 	/* due we don't get counter with quota any where else,
 	* here we will request just counters by default */
+	if (name)
+		add_string_attr(&req, name, NFACCT_NAME);
+
 	na = start_nest_attr(&req, NFACCT_FILTER);
-	add_uint32_attr(&req, NFACCT_F_QUOTAS,
+	add_uint32_attr(&req, htonl(mask),
 		NFACCT_FILTER_ATTR_MASK);
-	add_uint32_attr(&req, 0, NFACCT_FILTER_ATTR_VALUE);
+	add_uint32_attr(&req, htonl(filter), NFACCT_FILTER_ATTR_VALUE);
 	end_nest_attr(&req, na);
 	return send_nfacct_request(carg->sock, &req);
+}
+
+resourced_ret_c nfacct_send_get_counters(struct counter_arg *carg, const char *name)
+{
+	/* get and reset countes value */
+	return internal_nfacct_send_get(carg, NFNL_MSG_ACCT_GET_CTRZERO, name,
+			NFACCT_F_QUOTAS, 0);
+}
+
+resourced_ret_c nfacct_send_get_quotas(struct counter_arg *carg, const char *name)
+{
+	/* just get counters */
+	return internal_nfacct_send_get(carg, NFNL_MSG_ACCT_GET, name, NFACCT_F_QUOTA_BYTES,
+			NFACCT_F_QUOTA_BYTES);
+}
+
+resourced_ret_c nfacct_send_get_all(struct counter_arg *carg)
+{
+	/* get and reset everything, used when quiting */
+	return internal_nfacct_send_get(carg, NFNL_MSG_ACCT_GET_CTRZERO, NULL, 0, 0);
+}
+
+resourced_ret_c nfacct_send_get(struct nfacct_rule *rule)
+{
+	if (rule->intend == NFACCT_BLOCK || rule->intend == NFACCT_WARN)
+		return nfacct_send_get_quotas(rule->carg, rule->name);
+	else if (rule->intend == NFACCT_COUNTER)
+		return nfacct_send_get_counters(rule->carg, rule->name);
+
+	return RESOURCED_ERROR_INVALID_PARAMETER;
 }
 
 resourced_ret_c nfacct_send_initiate(struct counter_arg *carg)
@@ -213,8 +255,12 @@ bool recreate_counter_by_name(char *cnt_name, struct nfacct_rule *cnt)
 	char *io_part;
 	char *ifname_part;
 	char *saveptr;
+	char name[MAX_NAME_LENGTH]; /* parse buffer to avoid cnt_name modification */
 
-	switch (cnt_name[0]) {
+	strncpy(name, cnt_name, sizeof(name)-1);
+	name[MAX_NAME_LENGTH-1] = 0;
+
+	switch (name[0]) {
 	case 'c':
 		cnt->intend  = NFACCT_COUNTER;
 		break;
@@ -224,11 +270,55 @@ bool recreate_counter_by_name(char *cnt_name, struct nfacct_rule *cnt)
 	case 'r':
 		cnt->intend  = NFACCT_BLOCK;
 		break;
+	case 't':
+		cnt->intend  = NFACCT_TETH_COUNTER;
+		break;
 	default:
 		return false;
 	}
 
-	io_part = strtok_r(cnt_name, "_", &saveptr);
+	STRING_SAVE_COPY(cnt->name, cnt_name);
+
+	if (cnt->intend == NFACCT_TETH_COUNTER) {
+		char ifname_buf[MAX_IFACE_LENGTH];
+		int ifname_len;
+		resourced_iface_type iface;
+		/* tbnep+:seth_w0; means comes by bt go away by mobile interface,
+		 * it's outgoing traffic, due all tethering is mobile databased */
+		iftype_part = strchr(name, ':');
+		ret_value_msg_if (iftype_part == NULL,
+			false, "Invalid format of the tethering counter %s", name);
+		ifname_len = iftype_part - name - 1;
+		strncpy(ifname_buf, name + 1, ifname_len); /* skip first t */
+		ifname_buf[ifname_len] = '\0';
+		iface = get_iftype_by_name(ifname_buf);
+		/* check first part is it datacall */
+		if (iface == RESOURCED_IFACE_DATACALL) {
+			strncpy(cnt->ifname, ifname_buf, sizeof(cnt->ifname)-1);
+			cnt->ifname[sizeof(cnt->ifname)-1] = 0;
+			cnt->iotype = NFACCT_COUNTER_IN;
+		} else {
+			strncpy(ifname_buf, iftype_part + 1, sizeof(ifname_buf)-1); /* +1, due : symbol and
+								til the end of cnt_name */
+			ifname_buf[MAX_IFACE_LENGTH-1] = 0;
+			iface = get_iftype_by_name(ifname_buf);
+			if (iface == RESOURCED_IFACE_DATACALL) {
+				cnt->iotype = NFACCT_COUNTER_OUT;
+				strncpy(cnt->ifname, ifname_buf, sizeof(cnt->ifname)-1);
+				cnt->ifname[sizeof(cnt->ifname)-1] = 0;
+			}
+		}
+
+		if (cnt->iotype == NFACCT_COUNTER_UNKNOWN) {
+			_E("cant determine tethering direction %s", name);
+			return false;
+		}
+		cnt->iftype = RESOURCED_IFACE_DATACALL;
+		cnt->classid = RESOURCED_TETHERING_APP_CLASSID;
+		return true;
+	}
+
+	io_part = strtok_r(name, "_", &saveptr);
 	if (io_part != NULL)
 		cnt->iotype = convert_to_iotype(atoi(io_part + 1));
 	else
@@ -314,15 +404,19 @@ static unsigned int get_args_number(const char *cmd_buf)
 	return count;
 }
 
-static void wait_for_rule_cmd(struct nfacct_rule *rule, pid_t pid)
+static void wait_for_rule_cmd(pid_t pid)
 {
 	int status;
+	pid_t ret_pid;
 	char buf[256];
 
-	pid_t ret_pid = waitpid(pid, &status, 0);
+	if (!pid) {
+		_D("no need to wait");
+		return;
+	}
+	ret_pid = waitpid(pid, &status, 0);
 	if (ret_pid < 0) {
-		strerror_r(errno, buf, sizeof(buf));
-		_D("can't wait for a pid %d %d %s", pid, status, buf);
+		_D("can't wait for a pid %d %d %s", pid, status, strerror_r(errno, buf, sizeof(buf)));
 	}
 }
 
@@ -387,9 +481,8 @@ resourced_ret_c exec_iptables_cmd(const char *cmd_buf, pid_t *cmd_pid)
 
 		ret = execv(cmd, args);
 		if (ret) {
-			strerror_r(errno, buf, sizeof(buf));
 			_E("Can't execute %s: %s",
-				cmd_buf, buf);
+				cmd_buf, strerror_r(errno, buf, sizeof(buf)));
 		}
 		exit(ret);
 	}
@@ -405,7 +498,7 @@ static char *choose_iftype_name(struct nfacct_rule *rule)
 }
 
 static resourced_ret_c exec_iface_cmd(const char *pattern, const char *cmd,
-		const char *nfacct, const char *jump,
+		const char *chain, const char *nfacct, const char *jump,
 		char *iftype_name, pid_t *pid)
 {
 	char block_buf[MAX_PATH_LENGTH];
@@ -414,9 +507,9 @@ static resourced_ret_c exec_iface_cmd(const char *pattern, const char *cmd,
 	ret_value_msg_if(iftype_name == NULL, RESOURCED_ERROR_FAIL,
 		"Invalid network interface name argument");
 
-	ret = snprintf(block_buf, sizeof(block_buf), pattern, IPTABLES, cmd,
+	ret = snprintf(block_buf, sizeof(block_buf), pattern, IPTABLES, cmd, chain,
 		iftype_name, nfacct, jump);
-	ret_value_msg_if(ret > sizeof(block_buf), RESOURCED_ERROR_NONE,
+	ret_value_msg_if(ret > sizeof(block_buf), RESOURCED_ERROR_FAIL,
 		"Not enough buffer");
 	return exec_iptables_cmd(block_buf, pid);
 }
@@ -432,7 +525,7 @@ static resourced_ret_c exec_app_cmd(const char *pattern, const char *cmd,
 		"Invalid network interface name argument");
 	ret = snprintf(block_buf, sizeof(block_buf), pattern, IPTABLES, cmd,
 		iftype_name, classid, nfacct, jump);
-	ret_value_msg_if(ret > sizeof(block_buf), RESOURCED_ERROR_NONE,
+	ret_value_msg_if(ret > sizeof(block_buf), RESOURCED_ERROR_FAIL,
 		"Not enough buffer");
 	return exec_iptables_cmd(block_buf, pid);
 }
@@ -445,6 +538,16 @@ static char *get_iptables_cmd(const nfacct_rule_action action)
 		return DELETE;
 	else if (action == NFACCT_ACTION_INSERT)
 		return INSERT;
+
+	return "";
+}
+
+static char *get_iptables_chain(const nfacct_rule_direction iotype)
+{
+	if (iotype == NFACCT_COUNTER_IN)
+		return IN_RULE;
+	else if(iotype == NFACCT_COUNTER_OUT)
+		return OUT_RULE;
 
 	return "";
 }
@@ -482,15 +585,23 @@ static resourced_ret_c produce_app_rule(struct nfacct_rule *rule,
 		 *	don't use it in case of just block without a limit
 		 *	iow, send_limit = 0 and rcv_limit 0 */
 		if (action != NFACCT_ACTION_DELETE) {
+			ret = nfacct_send_del(rule);
+			ret_value_msg_if(ret != RESOURCED_ERROR_NONE, ret,
+				"can't del quota counter");
+
 			ret = nfacct_send_new(rule);
 			ret_value_msg_if(ret != RESOURCED_ERROR_NONE, ret,
 				"can't set nfacct counter");
+			keep_counter(rule);
 		}
 
 		/* we have a counter, let's key in a rule, drop in case of
 		 *  send_limit/rcv_limit */
 		ret = snprintf(nfacct_buf, sizeof(nfacct_buf), NFACCT_NAME_MOD,
 			rule->name);
+		ret_value_msg_if(ret > sizeof(nfacct_buf) || ret < 0, RESOURCED_ERROR_FAIL,
+				"Not enought buffer");
+
 		ret = exec_app_cmd(RULE_APP_IN, set_cmd, nfacct_buf,
 			jump_cmd, rule->classid, choose_iftype_name(rule), &pid);
 		ret_value_msg_if(ret != RESOURCED_ERROR_NONE,
@@ -499,16 +610,16 @@ static resourced_ret_c produce_app_rule(struct nfacct_rule *rule,
 				rule->classid, set_cmd, jump_cmd);
 
 		/* remove in any case */
-		if (action != NFACCT_ACTION_APPEND) {
+		if (action == NFACCT_ACTION_DELETE) {
 			/* TODO here and everywhere should be not just a del,
 			 *	here should be get counted value and than
 			 *	set new counter with that value, but it's minor issue,
 			 *	due it's not clear when actual counters was stored,
 			 *	and based on which value settings made such decition */
-			wait_for_rule_cmd(rule, pid);
-			ret = nfacct_send_del(rule);
-			ret_value_msg_if(ret != RESOURCED_ERROR_NONE, ret,
-				"can't set nfacct counter");
+			wait_for_rule_cmd(pid);
+			rule->iptables_rule = nfacct_send_del;
+			set_finalize_flag(rule);
+			nfacct_send_get(rule);
 		}
 	}
 
@@ -518,27 +629,36 @@ static resourced_ret_c produce_app_rule(struct nfacct_rule *rule,
 		rule->quota = send_limit;
 		generate_counter_name(rule);
 		if (action != NFACCT_ACTION_DELETE) {
+			ret = nfacct_send_del(rule);
+			ret_value_msg_if(ret != RESOURCED_ERROR_NONE, ret,
+				"can't del quota counter");
+
 			ret = nfacct_send_new(rule);
 			ret_value_msg_if(ret != RESOURCED_ERROR_NONE, ret,
 				"can't set quota counter");
+			keep_counter(rule);
 		}
-
-		ret_value_msg_if(ret != RESOURCED_ERROR_NONE, ret,
-			"can't set counter");
 
 		ret = snprintf(nfacct_buf, sizeof(nfacct_buf), NFACCT_NAME_MOD,
 			rule->name);
+		ret_value_msg_if(ret > sizeof(nfacct_buf) || ret < 0, RESOURCED_ERROR_FAIL,
+				"Not enought buffer");
+
 		ret = exec_app_cmd(RULE_APP_OUT, set_cmd, nfacct_buf,
 			jump_cmd, rule->classid, choose_iftype_name(rule), &pid);
 		ret_value_msg_if(ret != RESOURCED_ERROR_NONE,
 			RESOURCED_ERROR_FAIL, "Can't set conditional block for engress"
 				" traffic, for classid %u, cmd %s, j %s",
 				rule->classid, set_cmd, jump_cmd);
-		if (action != NFACCT_ACTION_APPEND) {
-			wait_for_rule_cmd(rule, pid);
-			ret = nfacct_send_del(rule);
-			ret_value_msg_if(ret != RESOURCED_ERROR_NONE, ret,
-				"can't del nfacct counter");
+		if (action == NFACCT_ACTION_DELETE) {
+			wait_for_rule_cmd(pid);
+			rule->iptables_rule = nfacct_send_del;
+			/* not effective, it's better to replace
+			 * set_finalize_flag by set_property,
+			 * due keep_counter it necessary only for
+			 * setting iptables_rule */
+			set_finalize_flag(rule);
+			nfacct_send_get(rule);
 		}
 	}
 	return RESOURCED_ERROR_NONE;
@@ -557,68 +677,86 @@ static resourced_ret_c produce_iface_rule(struct nfacct_rule *rule,
 	resourced_ret_c ret;
 	pid_t pid = 0;
 
+	/* keep one name for all restriction always */
+	rule->iotype = NFACCT_COUNTER_IN;
+	rule->quota = rcv_limit;
+	generate_counter_name(rule);
+
+	if (action != NFACCT_ACTION_DELETE) {
+		/* send delete comman in case of creation,
+		 * because nfacct doesn't reset value for nfacct quota
+		 * in case of quota existing */
+		ret = nfacct_send_del(rule);
+		ret_value_msg_if(ret != RESOURCED_ERROR_NONE, ret,
+			"can't del quota counter");
+
+		ret = nfacct_send_new(rule);
+		ret_value_msg_if(ret != RESOURCED_ERROR_NONE, ret,
+			"can't set quota counter");
+		keep_counter(rule);
+	}
+
 	if (iotype & NFACCT_COUNTER_IN) {
 		/* income part */
-		rule->quota = rcv_limit;
-		rule->iotype = NFACCT_COUNTER_IN;
-		generate_counter_name(rule);
-
-		if (action != NFACCT_ACTION_DELETE) {
-			ret = nfacct_send_new(rule);
-			ret_value_msg_if(ret != RESOURCED_ERROR_NONE, ret,
-				"can't set quota counter");
-		}
-
 		ret = snprintf(nfacct_buf, sizeof(nfacct_buf),
 			NFACCT_NAME_MOD, rule->name);
-		ret_value_msg_if(ret < 0, RESOURCED_ERROR_FAIL,
+		ret_value_msg_if(ret > sizeof(nfacct_buf) || ret < 0, RESOURCED_ERROR_FAIL,
 				"Not enought buffer");
 
-		ret = exec_iface_cmd(RULE_IFACE_IN, set_cmd, nfacct_buf,
-			jump_cmd, choose_iftype_name(rule), &pid);
+		ret = exec_iface_cmd(RULE_IFACE_IN, set_cmd, get_iptables_chain(rule->iotype),
+			nfacct_buf, jump_cmd, choose_iftype_name(rule), &pid);
 		ret_value_msg_if(ret != RESOURCED_ERROR_NONE,
-			RESOURCED_ERROR_NONE, "Can't set conditional block for ingress"
+			RESOURCED_ERROR_FAIL, "Can't set conditional block for ingress"
 				" traffic, for iftype %d, cmd %s, j %s",
 				rule->iftype, set_cmd, jump_cmd);
 
-		if (action != NFACCT_ACTION_APPEND) {
-			wait_for_rule_cmd(rule, pid);
-			ret = nfacct_send_del(rule);
-			ret_value_msg_if(ret != RESOURCED_ERROR_NONE, ret,
-				"can't set quota counter");
+		/* for tethering */
+		if (rule->intend == NFACCT_WARN || rule->intend == NFACCT_BLOCK) {
+			/* RULE_IFACE_OUT is not a misprint here */
+			wait_for_rule_cmd(pid);
+			ret = exec_iface_cmd(RULE_IFACE_IN, set_cmd, FORWARD_RULE, nfacct_buf,
+				jump_cmd, choose_iftype_name(rule), &pid);
+			ret_value_msg_if(ret != RESOURCED_ERROR_NONE,
+				RESOURCED_ERROR_FAIL, "Can't set forward rule for ingress"
+					" traffic, for iftype %d, cmd %s, j %s",
+					rule->iftype, set_cmd, jump_cmd);
 		}
+		/* tethering */
 	}
 
 	if (iotype & NFACCT_COUNTER_OUT) {
 		/* outcome part */
-		rule->iotype = NFACCT_COUNTER_OUT;
 		rule->quota = send_limit;
-		generate_counter_name(rule);
-
-		if (action != NFACCT_ACTION_DELETE) {
-			ret = nfacct_send_new(rule);
-			ret_value_msg_if(ret != RESOURCED_ERROR_NONE, ret,
-				"can't set quota counter");
-		}
 
 		ret = snprintf(nfacct_buf, sizeof(nfacct_buf),
 				NFACCT_NAME_MOD, rule->name);
-		ret_value_msg_if(ret < 0, RESOURCED_ERROR_FAIL,
+		ret_value_msg_if(ret > sizeof(nfacct_buf) || ret < 0, RESOURCED_ERROR_FAIL,
 				"Not enough buffer");
 
-		ret = exec_iface_cmd(RULE_IFACE_OUT, set_cmd, nfacct_buf,
+		wait_for_rule_cmd(pid);
+		ret = exec_iface_cmd(RULE_IFACE_OUT, set_cmd, OUT_RULE, nfacct_buf,
 			jump_cmd, choose_iftype_name(rule), &pid);
 		ret_value_msg_if(ret != RESOURCED_ERROR_NONE,
 			RESOURCED_ERROR_FAIL, "Can't set conditional block for "
 				" engress traffic, for iftype %d, cmd %s, j %s",
 				rule->iftype, set_cmd, jump_cmd);
-
-		if (action != NFACCT_ACTION_APPEND) {
-			wait_for_rule_cmd(rule, pid);
-			ret = nfacct_send_del(rule);
-			ret_value_msg_if(ret != RESOURCED_ERROR_NONE, ret,
-				"can't set quota counter");
+		/* for tethering  */
+		if (rule->intend == NFACCT_WARN || rule->intend == NFACCT_BLOCK) {
+			wait_for_rule_cmd(pid);
+			ret = exec_iface_cmd(RULE_IFACE_OUT, set_cmd, FORWARD_RULE, nfacct_buf,
+				jump_cmd, choose_iftype_name(rule), &pid);
+			ret_value_msg_if(ret != RESOURCED_ERROR_NONE,
+				RESOURCED_ERROR_FAIL, "Can't set forward rule for engress"
+					" traffic, for iftype %d, cmd %s, j %s",
+					rule->iftype, set_cmd, jump_cmd);
 		}
+		/* tethering  */
+	}
+	if (action == NFACCT_ACTION_DELETE) {
+		wait_for_rule_cmd(pid);
+		rule->iptables_rule = nfacct_send_del;
+		set_finalize_flag(rule);
+		nfacct_send_get(rule);
 	}
 	return RESOURCED_ERROR_NONE;
 }
@@ -649,22 +787,21 @@ resourced_ret_c produce_net_rule(struct nfacct_rule *rule,
 void generate_counter_name(struct nfacct_rule *counter)
 {
 	char warn_symbol = 'c';
-	char *iftype_name = get_iftype_name(counter->iftype);
-	ret_msg_if(iftype_name == NULL, "Can't get interface name!");
-	STRING_SAVE_COPY(counter->ifname, iftype_name);
+	if (!strlen(counter->ifname)) {
+		char *iftype_name = get_iftype_name(counter->iftype);
+		/* trace counter name, maybe name was already generated */
+		ret_msg_if(iftype_name == NULL,
+			   "Can't get interface name for counter %s, iftype %d)!",
+			   counter->name, counter->iftype);
+		STRING_SAVE_COPY(counter->ifname, iftype_name);
+	}
 
 	if (counter->intend  == NFACCT_WARN)
 		warn_symbol = 'w';
 	else if (counter->intend  == NFACCT_BLOCK)
 		warn_symbol = 'r';
-	if (counter->classid != RESOURCED_ALL_APP_CLASSID)
-		snprintf(counter->name, MAX_NAME_LENGTH, "%c%d_%d_%d_%s",
+	snprintf(counter->name, MAX_NAME_LENGTH, "%c%d_%d_%d_%s",
 			warn_symbol, counter->iotype, counter->iftype,
 			counter->classid, counter->ifname);
-	else
-		snprintf(counter->name, MAX_NAME_LENGTH, "%c%d_%d_%s",
-			warn_symbol, counter->iotype, counter->iftype,
-			counter->ifname);
-
-	}
+}
 

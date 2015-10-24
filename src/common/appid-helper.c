@@ -17,15 +17,27 @@
  *
 */
 
+#include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 
-#define BASE_NAME_PREFIX "com.samsung."
 #define DOT_DELIMETER '.'
 
-static int is_base_name(const char *appid)
+/*
+ * no need to extract in case of com.facebook, com.opera.
+ * org.tizen
+ * but in case of samsung.Engk10bghd we will do it,
+ * It's better here to pass appid as is to setting,
+ * but in this case setting should group it, because
+ * several appid is possible in one package.
+ * */
+static bool is_base_name(const char *appid)
 {
-	return strstr(appid, BASE_NAME_PREFIX) != NULL;
+	char *dot = index(appid, DOT_DELIMETER);
+	if (!dot)
+		return false;
+
+	return index(dot, DOT_DELIMETER) != NULL;
 }
 
 void extract_pkgname(const char *appid, char *pkgname,

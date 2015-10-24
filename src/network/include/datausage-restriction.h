@@ -28,6 +28,8 @@
 #define _RESOURCED_RESTRICTION_H_
 
 #include <sqlite3.h>
+#include <stdbool.h>
+
 #include "resourced.h"
 #include "data_usage.h"
 #include "transmission.h"
@@ -42,7 +44,9 @@ resourced_ret_c update_restriction_db(
 	const int rcv_limit, const int snd_limit,
 	const resourced_restriction_state rst_state,
 	const int quota_id,
-	const resourced_roaming_type roaming);
+	const resourced_roaming_type roaming,
+	const char *ifname,
+	const char *imsi);
 
 /**
  * @desc Get restriction info from database
@@ -59,17 +63,23 @@ resourced_ret_c get_restriction_info(const char *app_id,
 resourced_ret_c process_kernel_restriction(
 	const u_int32_t classid,
 	const resourced_net_restrictions *rst,
-	const enum traffic_restriction_type rst_type);
+	const enum traffic_restriction_type rst_type,
+	const int quota_id);
 
 resourced_ret_c proc_keep_restriction(
 	const char *app_id, int quota_id, const resourced_net_restrictions *rst,
-	const enum traffic_restriction_type rst_type);
+	const enum traffic_restriction_type rst_type,
+	bool skip_kernel_op, resourced_restriction_state rst_state);
 
 resourced_ret_c remove_restriction_local(const char *app_id,
-					 const resourced_iface_type iftype);
+					 const resourced_iface_type iftype,
+					 const int quota_id,
+					 const char *imsi,
+					 const resourced_state_t ground);
 
 resourced_ret_c exclude_restriction_local(const char *app_id,
 					  const int quota_id,
-					  const resourced_iface_type iftype);
+					  const resourced_iface_type iftype,
+					  const char *imsi);
 
 #endif /* _RESOURCED_RESTRICTION_H_ */

@@ -25,8 +25,8 @@
 #ifndef __RESOURCED_VIP_PROCESS_H__
 #define __RESOURCED_VIP_PROCESS_H__
 
-#define CHECK_RELEASE_PROGRESS "/tmp/.release_ongoing"
-#define VIP_CGROUP	  	"/sys/fs/cgroup/vip"
+#define CHECK_RELEASE_PROGRESS	"/tmp/.release_ongoing"
+#define VIP_CGROUP		"/sys/fs/cgroup/vip"
 
 #endif /* __RESOURCED_VIP_PROCESS_H__ */
 

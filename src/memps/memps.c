@@ -60,6 +60,7 @@ struct mapinfo {
 	unsigned shared_dirty;
 	unsigned private_clean;
 	unsigned private_dirty;
+	unsigned swap;
 	char perm[4];
 	char name[1];
 };
@@ -72,6 +73,7 @@ struct trib_mapinfo {
 	unsigned private_dirty;
 	unsigned shared_clean_pss;
 	unsigned shared_dirty_pss;
+	unsigned swap;
 	unsigned rss;
 	unsigned pss;
 	unsigned size;
@@ -338,8 +340,13 @@ mapinfo *read_mapinfo(char** smaps, int rest_line)
 		goto oops;
 
 	while (rest_line-- && (line = cgets(smaps))) {
-		if (sscanf(line, "PSwap: %d kB", &tmp) == 1)
-			rest_line++;
+		if (strncmp("Swap: ", line, 6) == 0)
+			if (sscanf(line, "Swap: %d kB", &mi->swap) == 1)
+				continue;
+
+		if (strncmp("PSwap: ", line, 7) == 0)
+			if (sscanf(line, "PSwap: %d kB", &tmp) == 1)
+				rest_line++;
 	}
 
 	return mi;
@@ -432,6 +439,9 @@ static void get_mem_info(FILE *output_fp)
 		}
 	}
 
+	if (total_mem == 0)
+		goto out;
+
 	if (available == 0)
 		available = free + cached;
 	used = total_mem - available;
@@ -465,6 +475,7 @@ static void get_mem_info(FILE *output_fp)
 	fprintf(output_fp, "Available (Free+Reclaimable):%10d MB( %6d kB)\n",
 			available >> 10,
 			available);
+out:
 	fclose(fp);
 }
 
@@ -525,6 +536,7 @@ mapinfo *load_maps(int pid)
 				milist->shared_dirty += mi->shared_dirty;
 				milist->private_clean += mi->private_clean;
 				milist->private_dirty += mi->private_dirty;
+				milist->swap += mi->swap;
 
 				milist->perm[0] = mi->perm[0];
 				milist->perm[1] = mi->perm[1];
@@ -563,6 +575,7 @@ static void init_trib_mapinfo(trib_mapinfo *tmi)
 	tmi->shared_dirty = 0;
 	tmi->private_clean = 0;
 	tmi->private_dirty = 0;
+	tmi->swap = 0;
 	tmi->shared_clean_pss = 0;
 	tmi->shared_dirty_pss = 0;
 	tmi->rss = 0;
@@ -599,7 +612,8 @@ get_trib_mapinfo(unsigned int tgid, mapinfo *milist,
 			   && mi->shared_clean == 0
 			   && mi->shared_dirty == 0
 			   && mi->private_clean == 0
-			   && mi->private_dirty == 0) {
+			   && mi->private_dirty == 0
+			   && mi->swap == 0) {
 			result->other_devices += mi->size;
 		} else if (!strncmp(mi->name, STR_DRM_PATH1,
 				sizeof(STR_DRM_PATH1)) ||
@@ -611,6 +625,7 @@ get_trib_mapinfo(unsigned int tgid, mapinfo *milist,
 			result->shared_dirty += mi->shared_dirty;
 			result->private_clean += mi->private_clean;
 			result->private_dirty += mi->private_dirty;
+			result->swap += mi->swap;
 			result->rss += mi->rss;
 			result->pss += mi->pss;
 			result->size += mi->size;
@@ -789,6 +804,7 @@ static int show_map_all_new(int output_type, char *output_path)
 	unsigned total_shared_data = 0;
 	unsigned total_shared_code_pss = 0;
 	unsigned total_shared_data_pss = 0;
+	unsigned total_swap = 0;
 	unsigned total_rss = 0;
 	unsigned total_graphic_3d = 0;
 	unsigned total_gem_rss = 0;
@@ -825,20 +841,26 @@ static int show_map_all_new(int output_type, char *output_path)
 			fprintf(output_file,
 					"     PID  S(CODE)  S(DATA)  P(CODE)  P(DATA)"
 					"     PEAK      PSS       3D"
-					"     GEM(PSS)  GEM(RSS)"
-					" OOM_SCORE_ADJ    COMMAND\n");
+					"     GEM(PSS)  GEM(RSS)    SWAP"
+					"     OOM_SCORE_ADJ    COMMAND\n");
 		else
 			fprintf(output_file,
 					"     PID     CODE     DATA     PEAK     PSS"
-					"     3D      GEM(PSS)      COMMAND\n");
+					"     3D      GEM(PSS)      SWAP      COMMAND\n");
 	}
 
 	while (!(ret = readdir_r(pDir, &curdir, &result)) && result != NULL) {
+		char *base_name = NULL;
+
 		pid = atoi(curdir.d_name);
 		if (pid < 1 || pid > 32768 || pid == getpid())
 			continue;
 
 		if (get_cmdline(pid, cmdline) < 0)
+			continue;
+
+		base_name = basename(cmdline);
+		if (base_name && !strcmp(base_name, "mem-stress"))
 			continue;
 
 		milist = load_maps(pid);
@@ -852,16 +874,17 @@ static int show_map_all_new(int output_type, char *output_path)
 		if (!sum) {
 			if (verbos)
 				fprintf(output_file,
-					"%8d %8d %8d %8d %8d %8d %8d %8d %8d %8d"
+					"%8d %8d %8d %8d %8d %8d %8d %8d %8d %8d %8d"
 					" %8d \t\t%s\n",
 					pid,
 					tmi.shared_clean, tmi.shared_dirty,
 					tmi.private_clean, tmi.private_dirty,
 					tmi.peak_rss, tmi.pss, tmi.graphic_3d,
-					tmi.gem_pss, tmi.gem_rss, oom_score_adj, cmdline);
+					tmi.gem_pss, tmi.gem_rss, tmi.swap,
+					oom_score_adj, cmdline);
 			else
 				fprintf(output_file,
-					"%8d %8d %8d %8d %8d %8d %8d      %s\n",
+					"%8d %8d %8d %8d %8d %8d %8d %8d      %s\n",
 					pid,
 					tmi.shared_clean +
 					tmi.private_clean,
@@ -869,7 +892,8 @@ static int show_map_all_new(int output_type, char *output_path)
 					tmi.peak_rss,
 					tmi.pss,
 					tmi.graphic_3d,
-					tmi.gem_pss, cmdline);
+					tmi.gem_pss,
+					tmi.swap, cmdline);
 
 			if (tmi.other_devices != 0)
 				fprintf(output_file,
@@ -885,6 +909,7 @@ static int show_map_all_new(int output_type, char *output_path)
 		total_gem_pss += tmi.gem_pss;
 		total_private_code += tmi.private_clean;
 		total_private_data += tmi.private_dirty;
+		total_swap += tmi.swap;
 		total_shared_code += tmi.shared_clean;
 		total_shared_data += tmi.shared_dirty;
 		total_peak_rss += tmi.peak_rss;
@@ -902,27 +927,27 @@ static int show_map_all_new(int output_type, char *output_path)
 		fprintf(output_file,
 				"TOTAL:      S(CODE) S(DATA) P(CODE)  P(DATA)"
 				"    PEAK     PSS       3D    "
-				"GEM(PSS) GEM(RSS) GEM(ALLOC) TOTAL(KB)\n");
+				"GEM(PSS) GEM(RSS) GEM(ALLOC) SWAP TOTAL(KB)\n");
 		fprintf(output_file,
 			"         %8d %8d %8d %8d %8d %8d %8d"
-			" %8d %8d %8d %8d\n",
+			" %8d %8d %8d %8d %8d\n",
 			total_shared_code, total_shared_data,
 			total_private_code, total_private_data,
 			total_peak_rss,	total_pss, total_graphic_3d,
 			total_gem_pss, total_gem_rss,
-			total_allocated_gem,
+			total_allocated_gem, total_swap,
 			total_pss + total_graphic_3d +
 			total_allocated_gem);
 	} else {
 		fprintf(output_file,
 			"TOTAL:        CODE     DATA    PEAK     PSS     "
 			"3D    GEM(PSS) GEM(ALLOC)     TOTAL(KB)\n");
-		fprintf(output_file, "         %8d %8d %8d %8d %8d %8d %7d %8d\n",
+		fprintf(output_file, "         %8d %8d %8d %8d %8d %8d %7d %8d %8d\n",
 			total_shared_code + total_private_code,
 			total_shared_data + total_private_data,
 			total_peak_rss, total_pss,
 			total_graphic_3d, total_gem_pss,
-			total_allocated_gem,
+			total_allocated_gem, total_swap,
 			total_pss + total_graphic_3d +
 			total_allocated_gem);
 
@@ -972,6 +997,7 @@ static int show_map_new(int pid)
 	unsigned shared_clean = 0;
 	unsigned private_dirty = 0;
 	unsigned private_clean = 0;
+	unsigned swap = 0;
 	unsigned pss = 0;
 	unsigned start = 0;
 	unsigned end = 0;
@@ -979,6 +1005,7 @@ static int show_map_new(int pid)
 	unsigned private_dirty_total = 0;
 	unsigned shared_clean_total = 0;
 	unsigned shared_dirty_total = 0;
+	unsigned swap_total = 0;
 	int duplication = 0;
 
 	milist = load_maps(pid);
@@ -1003,12 +1030,14 @@ static int show_map_new(int pid)
 		shared_dirty += mi->shared_dirty;
 		private_clean += mi->private_clean;
 		private_dirty += mi->private_dirty;
+		swap += mi->swap;
 		pss += mi->pss;
 
 		shared_clean_total += mi->shared_clean;
 		shared_dirty_total += mi->shared_dirty;
 		private_clean_total += mi->private_clean;
 		private_dirty_total += mi->private_dirty;
+		swap_total += mi->swap;
 
 		if (!duplication)
 			start = mi->start;
@@ -1030,13 +1059,15 @@ static int show_map_new(int pid)
 		shared_dirty = 0;
 		private_clean = 0;
 		private_dirty = 0;
+		swap = 0;
 	}
 	if (sum) {
-		printf("%8d %8d %8d %8d %18d\n",
+		printf("%8d %8d %8d %8d %8d %18d\n",
 		       shared_clean_total,
 		       shared_dirty_total,
 		       private_clean_total,
 		       private_dirty_total,
+		       swap_total,
 		       pss);
 	}
 
@@ -1056,7 +1087,11 @@ void check_kernel_version(void)
 			char str[3];
 			int sub_version;
 			pch = strstr(buf.release, ".");
+			if (!pch)
+				return;
+
 			strncpy(str, pch+1, 2);
+			str[2] = '\0';
 			sub_version = atoi(str);
 
 			if (sub_version >= 10)
@@ -1068,7 +1103,7 @@ void check_kernel_version(void)
 				ignore_smaps_field = 7; /* Referenced, Anonymous, AnonHugePages,
 						   Swap, KernelPageSize, MMUPageSize,
 						   Locked */
-		} else {
+	} else {
 			ignore_smaps_field = 4; /* Referenced, Swap, KernelPageSize,
 						   MMUPageSize */
 		}

@@ -36,7 +36,9 @@
 #include <unistd.h>
 
 #include "macro.h"
+#include "util.h"
 #include "proc_stat.h"
+#include "procfs.h"
 #include "trace.h"
 #include "proc-noti.h"
 #include "const.h"
@@ -44,6 +46,7 @@
 #define PROC_STAT_PATH "/proc/%d/stat"
 #define PROC_STATM_PATH "/proc/%d/statm"
 #define PROC_CMDLINE_PATH "/proc/%d/cmdline"
+#define PROC_MEMINFO_BUF_SIZE 1024
 
 #ifndef TEST_IN_X86
 #include <assert.h>
@@ -109,94 +112,23 @@ API bool proc_stat_get_mem_usage_by_pid(pid_t pid, unsigned int *rss)
 	return true;
 }
 
-
-static int get_mem_size(char *buffer, const char *const items[], const int items_len[], const int items_cnt, unsigned int mem_size[])
-{
-	char *p = buffer;
-	int num_found = 0;
-
-	while (*p && num_found < items_cnt) {
-		int i = 0;
-		while (i < items_cnt) {
-			if (strncmp(p, items[i], items_len[i] - 1) == 0) {
-				/* the format of line is like this "MemTotal:		  745696 kB" */
-				/* when it finds a item, skip the name of item */
-				p += items_len[i];
-
-				/* skip white space */
-				while (*p == ' ')
-					++p;
-
-				char *num = p;
-
-				/* go to the immediate next of numerical value */
-				while (*p >= '0' && *p <= '9')
-					++p;
-
-				/* at this time, [num,p) is the value of item */
-
-				/* insert null to p to parse [num,p] by atoi() */
-				if (*p != 0) {
-					*p = 0;
-					++p;
-
-					/* when it is the end of buffer, to avoid out of buffer */
-					if (*p == 0)
-						--p;
-				}
-				mem_size[i] = atoi(num);
-				num_found++;
-				break;
-			}
-			++i;
-		}
-		++p;
-	}
-
-	return num_found;
-}
-
-
 API bool proc_stat_get_total_mem_size(unsigned int *total_mem)
 {
-	int fd = 0;
-	int len = 0;
-	char *buffer = NULL;
-	const int buffer_size = 4096;
-	static const char *const items[] = { "MemTotal:" };
-	static const int items_len[] = {sizeof("MemTotal:") };
-	unsigned int mem_size[1];
-	int num_found;
+	static unsigned int total_mem_cached = 0;
+	unsigned int mem;
 
 	assert(total_mem != NULL);
 
-	fd = open("/proc/meminfo", O_RDONLY);
-	if (fd < 0)
+	if (total_mem_cached)
+		goto finish;
+
+	if (proc_get_meminfo("MemTotal", &mem) < 0)
 		return false;
 
-	buffer = malloc(buffer_size);
-	assert(buffer != NULL);
+	total_mem_cached = KBYTE_TO_MBYTE(mem);
 
-	len = read(fd, buffer, buffer_size - 1);
-	close(fd);
-
-	if (len < 0) {
-		free(buffer);
-		return false;
-	}
-
-	buffer[len] = 0;
-
-	/* to get the best search performance, the order of items should refelect the order of /proc/meminfo */
-	num_found = get_mem_size(buffer, items, items_len, 1 , mem_size);
-
-	free(buffer);
-
-	if (num_found < 1)
-		return false;
-
-	/* total_mem = "MemTotal" */
-	*total_mem = mem_size[0] / 1024;
+finish:
+	*total_mem = total_mem_cached;
 
 	return true;
 }
@@ -204,50 +136,8 @@ API bool proc_stat_get_total_mem_size(unsigned int *total_mem)
 
 API bool proc_stat_get_free_mem_size(unsigned int *free_mem)
 {
-	int fd = 0;
-	char *buffer = NULL;
-	const int buffer_size = 4096;
-	int len = 0;
-	static const char *const items[] = { "MemFree:", "Buffers:", "Cached:", "SwapCached:", "Shmem:" };
-	static const int items_len[] = { sizeof("MemFree:"), sizeof("Buffers:"), sizeof("Cached:"),
-							  sizeof("SwapCached:"), sizeof("Shmem:") };
-	static const int items_cnt = ARRAY_SIZE(items);
-	unsigned int mem_size[items_cnt];
-	int num_found;
-
-	assert(free_mem != NULL);
-
-	fd = open("/proc/meminfo", O_RDONLY);
-
-	if (fd < 0)
-		return false;
-
-	buffer = malloc(buffer_size);
-	assert(buffer != NULL);
-
-	len = read(fd, buffer, buffer_size - 1);
-	close(fd);
-
-	if (len < 0) {
-		free(buffer);
-		return false;
-	}
-
-	buffer[len] = 0;
-
-
-	/* to get the best search performance, the order of items should refelect the order of /proc/meminfo */
-	num_found = get_mem_size(buffer, items, items_len, items_cnt, mem_size);
-
-	free(buffer);
-
-	if (num_found < items_cnt)
-		return false;
-
-	/* free_mem = "MemFree" + "Buffers" + "Cached" + "SwapCache" - "Shmem" */
-	*free_mem = (mem_size[0] + mem_size[1] + mem_size[2] + mem_size[3] - mem_size[4]) / 1024;
-
-	return true;
+	*free_mem = proc_get_mem_available();
+	return !!(*free_mem);
 }
 
 static bool get_proc_cmdline(pid_t pid, char *cmdline)
@@ -278,6 +168,7 @@ static bool get_proc_cmdline(pid_t pid, char *cmdline)
 		filename = filename + 1;
 
 	strncpy(cmdline, filename, NAME_MAX-1);
+	cmdline[NAME_MAX-1] = 0;
 
 	return true;
 }
@@ -302,6 +193,7 @@ static bool get_proc_filename(pid_t pid, char *process_name)
 	}
 
 	strncpy(process_name, filename, NAME_MAX-1);
+	process_name[NAME_MAX-1] = 0;
 	fclose(fp);
 
 	return true;
@@ -392,7 +284,7 @@ static int comapre_pid(const pid_t *pid_a, const pid_t *pid_b)
 	assert(pid_b != NULL);
 
 	/* the process which has smaller number of pid is ordered ahead */
-	return (*pid_a - *pid_b);
+	return *pid_a - *pid_b;
 }
 
 /**
@@ -468,7 +360,7 @@ API bool proc_stat_get_pids(pid_t **pids, int *cnt)
 
 	*cnt = garray->len;
 
-	for (i = 0 ; i < garray->len; ++i)
+	for (i = 0; i < garray->len; ++i)
 		(*pids)[i] = g_array_index(garray, pid_t, i);
 
 	g_array_free(garray, true);
@@ -510,7 +402,7 @@ static void update_proc_infos(GArray *pids, GArray *proc_infos,
 	pids_cnt = pids->len;
 
 	/* with current pids, update proc_infos */
-	for (i = 0 ; i < pids_cnt; ++i) {
+	for (i = 0; i < pids_cnt; ++i) {
 		unsigned long utime, stime;
 
 		if (cur_pi_idx < proc_infos->len)
@@ -629,10 +521,10 @@ static int compare_proc_info(const proc_stat_process_info *proc_info_a, const pr
 	exec_time_b = proc_info_b->utime_diff + proc_info_b->stime_diff;
 
 	if (exec_time_a != exec_time_b)
-		return (exec_time_b - exec_time_a);
+		return exec_time_b - exec_time_a;
 
 	if (proc_info_a->fresh != proc_info_b->fresh)
-		return ((int)(proc_info_b->fresh) - (int)(proc_info_a->fresh));
+		return (int)(proc_info_b->fresh) - (int)(proc_info_a->fresh);
 
 	return 0;
 
@@ -659,7 +551,7 @@ static void pick_valid_proc_infos(GArray *proc_infos, GArray *valid_proc_infos, 
 	if (total_valid_proc_time != NULL)
 		*total_valid_proc_time = 0;
 
-	for (i = 0; i < proc_infos->len ; ++i) {
+	for (i = 0; i < proc_infos->len; ++i) {
 		assert(i < proc_infos->len);
 		pi = g_array_index(proc_infos, proc_stat_process_info, i);
 
@@ -674,9 +566,8 @@ static void pick_valid_proc_infos(GArray *proc_infos, GArray *valid_proc_infos, 
 	g_array_sort(valid_proc_infos, (GCompareFunc)compare_proc_info);
 }
 
-
-static GArray *g_pids = NULL;
-static GArray *proc_infos = NULL;
+static GArray *g_pids;
+static GArray *proc_infos;
 
 API void proc_stat_init(void)
 {
@@ -763,7 +654,7 @@ static inline int send_str(int fd, char *str)
 			len = NOTI_MAXARGLEN;
 		ret = write(fd, &len, sizeof(int));
 		if (ret < 0) {
-			_E("%s: write failed\n", __FUNCTION__);
+			_E("%s: write failed\n", __func__);
 			return ret;
 		}
 		ret = write(fd, str, len);
@@ -778,22 +669,97 @@ static int send_socket(struct resourced_noti *msg, bool sync)
 	int result = 0;
 	struct sockaddr_un clientaddr;
 	int i;
-	int ret;
+	int ret = 0;
+	struct timeval tv = { 1, 0 };	/* 1sec */
 
 	client_sockfd = socket(AF_UNIX, SOCK_STREAM, 0);
 	if (client_sockfd == -1) {
-		_E("%s: socket create failed\n", __FUNCTION__);
+		_E("%s: socket create failed\n", __func__);
 		return -1;
 	}
 
 	bzero(&clientaddr, sizeof(clientaddr));
 	clientaddr.sun_family = AF_UNIX;
 	strncpy(clientaddr.sun_path, RESOURCED_SOCKET_PATH, sizeof(clientaddr.sun_path) - 1);
+	clientaddr.sun_path[sizeof(clientaddr.sun_path)-1] = 0;
 	client_len = sizeof(clientaddr);
 
 	if (connect(client_sockfd, (struct sockaddr *)&clientaddr, client_len) <
 	    0) {
-		_E("%s: connect failed\n", __FUNCTION__);
+		_E("%s: connect failed\n", __func__);
+		goto error;
+	}
+
+	setsockopt(client_sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+	ret = send_int(client_sockfd, msg->pid);
+	if (ret < 0) {
+		_E("send failed (%d)\n", ret);
+		goto error;
+	}
+	ret = send_int(client_sockfd, msg->type);
+	if (ret < 0) {
+		_E("send failed (%d)\n", ret);
+		goto error;
+	}
+	ret = send_str(client_sockfd, msg->path);
+	if (ret < 0) {
+		_E("send failed (%d)\n", ret);
+		goto error;
+	}
+	ret = send_int(client_sockfd, msg->argc);
+	if (ret < 0) {
+		_E("send failed (%d)\n", ret);
+		goto error;
+	}
+	for (i = 0; i < msg->argc; i++) {
+		ret = send_str(client_sockfd, msg->argv[i]);
+		if (ret < 0) {
+			_E("send failed (%d)\n", ret);
+			goto error;
+		}
+	}
+
+	if (sync) {
+		ret = read(client_sockfd, &result, sizeof(int));
+		if (ret < 0) {
+			_E("%s: read failed\n", __func__);
+			goto error;
+		}
+	}
+
+	close(client_sockfd);
+	return result;
+error:
+	close(client_sockfd);
+	return ret;
+}
+
+static int send_socket_with_repy(struct resourced_noti *msg,
+    char*buf, char* len_buf)
+{
+	int client_len;
+	int client_sockfd;
+	int result = 0;
+	struct sockaddr_un clientaddr;
+	int i, ret;
+	int size = atoi(len_buf);
+	char errbuf[256];
+
+	client_sockfd = socket(AF_UNIX, SOCK_STREAM, 0);
+	if (client_sockfd == -1) {
+		_E("socket create failed, errno: %d, %s\n", errno, strerror_r(errno, errbuf, sizeof(errbuf)));
+		return -errno;
+	}
+
+	bzero(&clientaddr, sizeof(clientaddr));
+	clientaddr.sun_family = AF_UNIX;
+	strncpy(clientaddr.sun_path, RESOURCED_SOCKET_PATH,
+	    sizeof(clientaddr.sun_path) - 1);
+	client_len = sizeof(clientaddr);
+
+	ret = connect(client_sockfd, (struct sockaddr *)&clientaddr, client_len);
+	if (ret < 0) {
+		_E("%s: connect failed\n", __func__);
 		close(client_sockfd);
 		return RESOURCED_ERROR_FAIL;
 	}
@@ -805,13 +771,17 @@ static int send_socket(struct resourced_noti *msg, bool sync)
 	for (i = 0; i < msg->argc; i++)
 		send_str(client_sockfd, msg->argv[i]);
 
-	if (sync) {
-		ret = read(client_sockfd, &result, sizeof(int));
-		if (ret < 0) {
-			_E("%s: read failed\n", __FUNCTION__);
-			close(client_sockfd);
-			return RESOURCED_ERROR_FAIL;
-		}
+	ret = recv(client_sockfd, &result, sizeof(int), 0);
+	if (ret < 0 || result < 0) {
+		_E("%s: read failed\n", __func__);
+		close(client_sockfd);
+		return RESOURCED_ERROR_FAIL;
+	}
+	ret = recv(client_sockfd, buf, size, 0);
+	if (ret < 0) {
+		_E("%s: read failed\n", __func__);
+		close(client_sockfd);
+		return RESOURCED_ERROR_FAIL;
 	}
 
 	close(client_sockfd);
@@ -855,6 +825,34 @@ static resourced_ret_c proc_cgroup_send_status(const int type, int num, ...)
 	return ret;
 }
 
+static resourced_ret_c proc_send_get_status(const int type, char* pid_buf,
+    char*buf, char* len_buf)
+{
+	struct resourced_noti *msg;
+	resourced_ret_c ret = RESOURCED_ERROR_NONE;
+
+	msg = malloc(sizeof(struct resourced_noti));
+
+	if (msg == NULL)
+		return RESOURCED_ERROR_OUT_OF_MEMORY;
+
+	msg->pid = getpid();
+	msg->type = type;
+	msg->path = NULL;
+
+	msg->argc = 2;
+	msg->argv[0] = pid_buf;
+	msg->argv[1] = len_buf;
+
+	ret = send_socket_with_repy(msg, buf, len_buf);
+	if (ret < 0)
+		ret = RESOURCED_ERROR_FAIL;
+
+	free(msg);
+	return ret;
+}
+
+
 API resourced_ret_c proc_cgroup_foregrd(void)
 {
 	char buf[MAX_DEC_SIZE(int)];
@@ -883,7 +881,7 @@ API resourced_ret_c proc_cgroup_inactive(pid_t pid)
 	return proc_cgroup_send_status(PROC_CGROUP_SET_INACTIVE, 1, buf);
 }
 
-API resourced_ret_c proc_group_change_status(int type, pid_t pid, char* app_id)
+API resourced_ret_c proc_group_change_status(int type, pid_t pid, char *app_id)
 {
 	char pid_buf[MAX_DEC_SIZE(int)];
 	char appid_buf[NOTI_MAXARGLEN];
@@ -899,7 +897,7 @@ API resourced_ret_c proc_cgroup_sweep_memory(void)
 	return proc_cgroup_send_status(PROC_CGROUP_GET_MEMSWEEP, 1, buf);
 }
 
-API resourced_ret_c proc_cgroup_launch(int type, pid_t pid, char* app_id, char* pkg_id)
+API resourced_ret_c proc_cgroup_launch(int type, pid_t pid, char *app_id, char *pkg_id)
 {
 	char pid_buf[MAX_DEC_SIZE(int)];
 	char appid_buf[NOTI_MAXARGLEN];
@@ -908,5 +906,15 @@ API resourced_ret_c proc_cgroup_launch(int type, pid_t pid, char* app_id, char* 
 	snprintf(appid_buf, sizeof(appid_buf)-1, "%s", app_id);
 	snprintf(pkgid_buf, sizeof(pkgid_buf)-1, "%s", pkg_id);
 	return proc_cgroup_send_status(type, 3, pid_buf, appid_buf, pkgid_buf);
+}
+
+API resourced_ret_c proc_stat_get_pid_entry(int type, pid_t pid,
+    char* buf, int len)
+{
+	char pid_buf[MAX_DEC_SIZE(int)];
+	char len_buf[MAX_DEC_SIZE(int)];
+	snprintf(pid_buf, sizeof(pid_buf), "%d", pid);
+	snprintf(len_buf, sizeof(len_buf), "%d", len);
+	return proc_send_get_status(type, pid_buf, buf, len_buf);
 }
 

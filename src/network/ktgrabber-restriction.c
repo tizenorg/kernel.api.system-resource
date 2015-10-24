@@ -242,11 +242,12 @@ static resourced_ret_c init_restriction_context(void)
 }
 
 int send_net_restriction(const enum traffic_restriction_type rst_type,
-			 const u_int32_t classid,
+			 const u_int32_t classid, const int UNUSED quota_id,
 			 const resourced_iface_type iftype,
 			 const int send_limit, const int rcv_limit,
 			 const int snd_warning_threshold,
-			 const int rcv_warning_threshold)
+			 const int rcv_warning_threshold,
+			 const char UNUSED *ifname)
 {
 	struct nf_arg nfarg;
 

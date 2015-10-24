@@ -76,6 +76,13 @@ API void libresourced_db_initialize_once(void)
 		return;
 	}
 
+	res = sqlite3_exec(database, "PRAGMA locking_mode = NORMAL", 0, 0, 0);
+	if (res != SQLITE_OK) {
+		_E("Can't set locking mode %s", sqlite3_errmsg(database));
+		_E("Skip set busy handler.");
+		return;
+	}
+
 	/* Set how many times we'll repeat our attempts for sqlite_step */
 	if (sqlite3_busy_handler(database, resourced_db_busy, NULL) != SQLITE_OK) {
 		_E("Couldn't set busy handler!");

@@ -26,42 +26,27 @@
 #ifndef __LOWMEM_HANDLER_H__
 #define __LOWMEM_HANDLER_H__
 
+#include <memory-common.h>
+
 void lowmem_dbus_init(void);
-int lowmem_oom_killer_cb(int memcg_idx, int flags);
-void lowmem_dynamic_process_killer(int type);
-unsigned int get_available(void);
-void change_memory_state(int state, int force);
+int lowmem_memory_oom_killer(int flags);
+int lowmem_proactive_oom_killer(int flags, char *appid);
+void lowmem_change_memory_state(int state, int force);
+void lowmem_memcg_set_threshold(int idx, int level, int value);
+void lowmem_memcg_set_leave_threshold(int idx, int value);
+unsigned long lowmem_get_ktotalram(void);
+void lowmem_trigger_swap(pid_t pid, int memcg_idx);
 
-void set_threshold(int level, int thres);
-void set_leave_threshold(int thres);
-
-#define NUM_FOREGROUND			3
-enum {
-	MEMCG_MEMORY,
-	MEMCG_FOREGROUND,
-	MEMCG_BACKGROUND = MEMCG_FOREGROUND + NUM_FOREGROUND,
-	MEMCG_MAX_GROUPS,
-};
-
-enum {
-	MEMNOTIFY_NORMAL,
-	MEMNOTIFY_SWAP,
-	MEMNOTIFY_LOW,
-	MEMNOTIFY_MEDIUM,
-	MEMNOTIFY_MAX_LEVELS,
-};
+/*
+ * Return memcg pointer to selected cgroup.
+ */
+int lowmem_get_memcg(enum memcg_type type, struct memcg **memcg_ptr);
 
 enum oom_killer_cb_flags {
 	OOM_NONE 		= 0x00000000,	/* for main oom killer thread */
 	OOM_FORCE		= 0x00000001,	/* for forced kill */
 	OOM_TIMER_CHECK		= 0x00000002,	/* for timer oom killer cb */
 	OOM_NOMEMORY_CHECK	= 0x00000004,	/* check victims' memory */
-};
-
-enum {
-	DYNAMIC_KILL_LARGEHEAP,
-	DYNAMIC_KILL_LUNCH,
-	DYNAMIC_KILL_MAX,
 };
 
 #endif /*__LOWMEM_HANDLER_H__*/

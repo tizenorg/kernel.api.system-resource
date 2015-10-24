@@ -47,10 +47,9 @@ resourced_ret_c init_database(const char *filename);
 /**
  * @desc Store result list to database.
  * @param stats - List of resolved application information
- * @param flush_period - Time interval for storing data
  * @return 1 if flushed, 0 if not
  */
-int store_result(struct application_stat_tree *stats, int flush_period);
+int store_result(struct application_stat_tree *stats);
 
 /**
  * @desc Just close sqlite statements.

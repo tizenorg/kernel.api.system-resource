@@ -39,6 +39,7 @@
  * rst_type - type of restriction on the basis of which the restriction
  * can be applied, removed or excluded.
  * classid - id, that generated for each application in the cgroup
+ * quota_id - quota_id to store in nf_cntr tree
  * iftype - network interface type to proccess restriction
  * send_limit - amount number of engress bytes allowed for restriction
  * rcv_limit - amount number of ingress bytes allowed for restriction
@@ -46,10 +47,11 @@
  * rcv_warning_limit - threshold for warning notification on ingress bytes
  */
 int send_net_restriction(const enum traffic_restriction_type rst_type,
-			 const u_int32_t classid,
+			 const u_int32_t classid, const int quota_id,
 			 const resourced_iface_type iftype,
 			 const int send_limit, const int rcv_limit,
 			 const int snd_warning_threshold,
-			 const int rcv_warning_threshold);
+			 const int rcv_warning_threshold,
+			 const char *ifname);
 
 #endif /* RESOURCED_NET_RESTRICTION_H_ */

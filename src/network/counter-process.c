@@ -43,7 +43,7 @@
 #include "module-data.h"
 #include "notification.h"
 #include "resourced.h"
-#include "roaming.h"
+#include "telephony.h"
 #include "storage.h"
 #include "trace.h"
 #include "transmission.h"
@@ -62,10 +62,10 @@ static char *null_str = "(null)";
 #define INSERT_QUERY "REPLACE INTO quotas " \
 	"(binpath, sent_quota, rcv_quota, " \
 	"snd_warning_threshold, rcv_warning_threshold, time_period, " \
-	"start_time, iftype, roaming) " \
-	"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);"
+	"start_time, iftype, roaming, imsi, ground) " \
+	"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);"
 #define REMOVE_QUOTA "DELETE FROM quotas WHERE binpath=? AND iftype=? " \
-	" AND roaming=?"
+	" AND roaming=? AND imsi=? AND ground=?"
 
 #define QUOTA_CEILING_VALUE 10737418220
 
@@ -103,7 +103,13 @@ static bool check_net_blocked(sig_atomic_t state)
 #ifdef CONFIG_DATAUSAGE_NFACCT
 static Eina_Bool send_counter_request(struct counter_arg *carg)
 {
-	return nfacct_send_get(carg) == RESOURCED_ERROR_NONE ?
+	resourced_ret_c ret;
+	if (CHECK_BIT(carg->opts->state, RESOURCED_FORCIBLY_QUIT_STATE))
+		ret = nfacct_send_get_all(carg);
+	else
+		ret = nfacct_send_get_counters(carg, NULL);
+
+	return ret == RESOURCED_ERROR_NONE ?
 		ECORE_CALLBACK_RENEW : ECORE_CALLBACK_CANCEL;
 }
 
@@ -129,6 +135,10 @@ static void populate_counters(char *cnt_name,
 		return;
 	}
 
+	if (counter.intend == NFACCT_TETH_COUNTER) {
+		_D("no need to populate already created counters");
+		return;
+	}
 	counter.carg = carg;
 	strncpy(counter.name, cnt_name, sizeof(counter.name)-1);
 	jump = get_counter_jump(counter.intend);
@@ -138,55 +148,17 @@ static void populate_counters(char *cnt_name,
 
 	produce_net_rule(&counter, 0, 0,
 		NFACCT_ACTION_APPEND, jump, counter.iotype);
-
-	keep_counter(&counter);
 }
 
-static void populate_traf_stat_list(char *cnt_name, uint64_t bytes,
-			struct counter_arg *carg)
+static void finalize_response(const char *cnt_name, struct counter_arg *carg)
 {
-	struct traffic_stat *to_insert;
-	struct classid_iftype_key *key;
-	struct nfacct_rule counter = { .name = {0}, .ifname = {0}, 0, };
-	traffic_stat_tree *tree = NULL;
+	struct nfacct_rule counter = { .carg = carg, 0 };
 
+#ifdef DEBUG_ENABLED
 	_D("cnt_name %s", cnt_name);
-
-	if (!recreate_counter_by_name(cnt_name, &counter)) {
-		_E("Can't parse counter name %s", cnt_name);
-		return;
-	}
-
-	_D("classid %u, iftype %u, iotype %d, intend %d, ifname %s, bytes %lu",
-	   counter.classid, counter.iftype, counter.iotype, counter.intend, counter.ifname, bytes);
-
-	if (counter.iotype == NFACCT_COUNTER_UNKNOWN ||
-		counter.intend != NFACCT_COUNTER) {
-		_E("Counter type is not supported!");
-		return;
-	}
-
-	tree = counter.iotype == NFACCT_COUNTER_IN ? carg->in_tree : carg->out_tree;
-	to_insert = g_new(struct traffic_stat, 1);
-	if (!to_insert) {
-		_D("Can't allocate %d bytes for traffic_stat\n", sizeof(struct traffic_stat));
-		return;
-	}
-
-	key = g_new(struct classid_iftype_key, 1);
-
-	if (!key) {
-		_D("Can't allocate %d bytes for classid_iftype_key\n", sizeof(struct classid_iftype_key));
-		g_free((gpointer)to_insert);
-		return;
-	}
-
-	to_insert->bytes = bytes;
-	/*to_insert->ifindex = cur->ifindex;*/
-	key->classid = counter.classid;
-	key->iftype = counter.iftype;
-	STRING_SAVE_COPY(key->ifname, counter.ifname);
-	g_tree_insert((GTree *) tree, (gpointer)key, to_insert);
+#endif
+	recreate_counter_by_name((char *)cnt_name, &counter);
+	finalize_counter(&counter);
 }
 
 static int fill_counters(struct rtattr *attr_list[__NFACCT_MAX],
@@ -203,8 +175,11 @@ static int fill_counters(struct rtattr *attr_list[__NFACCT_MAX],
 		/* TODO: optimize at kernel level, kernel should not send counter
 		 * in case of 0 bytes, it's necessary to introduce new NFACCT_*
 		 * command */
-		if (bytes)
-			populate_traf_stat_list(cnt_name, bytes, carg);
+		if (bytes) {
+			++carg->serialized_counters;
+			fill_nfacct_result(cnt_name, bytes, carg);
+		}
+		finalize_response(cnt_name, carg);
 	}
 
 	return 0;
@@ -240,23 +215,23 @@ static Eina_Bool send_counter_request(struct counter_arg *carg)
 static Eina_Bool _counter_func_cb(void *user_data)
 {
 	struct counter_arg *carg = (struct counter_arg *)user_data;
+	Eina_Bool cb_result = ECORE_CALLBACK_RENEW;
 
 	if (check_net_blocked(carg->opts->state)) {
 		ecore_timer_freeze(carg->ecore_timer);
 		return ECORE_CALLBACK_RENEW;
 	}
 
-	if (!(carg->opts->state & RESOURCED_FORCIBLY_QUIT_STATE)) {
-		/* Here we just sent command,
-		 * answer we receiving in another callback, send_command uses
-		 * return value the same as sendto
-		 */
+	/* Here we just sent command,
+	 * answer we receiving in another callback, send_command uses
+	 * return value the same as sendto */
+	cb_result = send_counter_request(carg);
 
-		return send_counter_request(carg);
-	}
+	/* In case of FORCIBLY_QUIT_STATE we just send one request and exit */
+	if (CHECK_BIT(carg->opts->state, RESOURCED_FORCIBLY_QUIT_STATE))
+		return ECORE_CALLBACK_CANCEL;
 
-	close(carg->sock);
-	return ECORE_CALLBACK_CANCEL;
+	return cb_result;
 }
 
 static dbus_bool_t deserialize_restriction(
@@ -277,6 +252,7 @@ static dbus_bool_t deserialize_restriction(
 		DBUS_TYPE_INT32, &(rest->snd_warning_limit),
 		DBUS_TYPE_INT32, &(rest->rcv_warning_limit),
 		DBUS_TYPE_INT32, &(rest->roaming),
+		DBUS_TYPE_STRING, &(rest->imsi),
 		DBUS_TYPE_INVALID);
 
 	if (ret == FALSE) {
@@ -297,8 +273,9 @@ static DBusMessage *edbus_process_restriction(E_DBus_Object *obj,
 	int ret;
 	resourced_ret_c dbus_ret = RESOURCED_ERROR_NONE;
 	char *appid = NULL;
-	resourced_net_restrictions rest;
+	resourced_net_restrictions rest = { 0, };
 	enum traffic_restriction_type rst_type;
+	resourced_restriction_info rst_info = {0,};
 
 	ret = dbus_message_is_method_call(
 	    msg, RESOURCED_INTERFACE_NETWORK,
@@ -316,9 +293,14 @@ static DBusMessage *edbus_process_restriction(E_DBus_Object *obj,
 		dbus_ret = RESOURCED_ERROR_FAIL;
 		goto out;
 	}
+	rest.ifname = get_iftype_name(rest.iftype);
 
+	rst_info.ifname = get_iftype_name(RESOURCED_IFACE_DATACALL);
+	get_restriction_info(appid, RESOURCED_IFACE_DATACALL, &rst_info);
+	/* TODO : 2SIM device with restriction per application */
+	/* restriction is not imsi based */
 	dbus_ret = proc_keep_restriction(appid, NONE_QUOTA_ID, &rest,
-					     rst_type);
+					     rst_type, false, rst_info.rst_state);
 out:
 	dbus_message_iter_append_basic(&iter, DBUS_TYPE_INT32, &dbus_ret);
 
@@ -336,9 +318,10 @@ static DBusMessage *edbus_update_counters(E_DBus_Object *obj, DBusMessage *msg)
 					      "Method is not supported");
 
 	if (m_data != NULL && m_data->carg != NULL) {
-		if (!(m_data->carg->opts->state & RESOURCED_FORCIBLY_QUIT_STATE))
-			m_data->carg->opts->state |=
-				RESOURCED_FORCIBLY_FLUSH_STATE;
+		if (!(CHECK_BIT(m_data->carg->opts->state, RESOURCED_FORCIBLY_QUIT_STATE))) {
+			SET_BIT(m_data->carg->opts->state, RESOURCED_FORCIBLY_FLUSH_STATE);
+			SET_BIT(m_data->carg->opts->state, RESOURCED_UPDATE_REQUESTED);
+		}
 
 		/* postpone periodic update on one minute */
 		reschedule_count_timer(m_data->carg, COUNTER_UPDATE_PERIOD);
@@ -348,18 +331,6 @@ static DBusMessage *edbus_update_counters(E_DBus_Object *obj, DBusMessage *msg)
 	reply = dbus_message_new_method_return(msg);
 	return reply;
 }
-
-struct serialization_quota {
-	int time_period;
-	int64_t snd_quota;
-	int64_t rcv_quota;
-	int snd_warning_threshold;
-	int rcv_warning_threshold;
-	resourced_state_t quota_type;
-	resourced_iface_type iftype;
-	time_t start_time;
-	resourced_roaming_type roaming_type;
-};
 
 static inline int _get_threshold_part(int time_period)
 {
@@ -413,16 +384,42 @@ static dbus_bool_t deserialize_quota(
 		DBUS_TYPE_INT32, &quota->iftype,
 		DBUS_TYPE_INT32, &quota->start_time,
 		DBUS_TYPE_INT32, &quota->roaming_type,
+		DBUS_TYPE_STRING, &quota->imsi_hash,
 		DBUS_TYPE_INVALID);
 	if (ret == FALSE) {
 		_E("Can't deserialize set quota message ![%s:%s]\n",
 		err.name, err.message);
+		goto release;
 	}
 
-	dbus_error_free(&err);
+	if (!quota->start_time) {
+		_E("Start time wasn't specified!\n");
+		ret = FALSE;
+		goto release;
+	}
 
-	quota->iftype =	(quota->iftype == RESOURCED_IFACE_UNKNOWN) ?
-			RESOURCED_IFACE_ALL : quota->iftype;
+	if (!quota->time_period) {
+		_E("Time period wasn't specified!\n");
+		ret = FALSE;
+		goto release;
+	}
+
+	if(quota->iftype <= RESOURCED_IFACE_UNKNOWN ||
+	   quota->iftype >= RESOURCED_IFACE_LAST_ELEM) {
+		_E("Unknown network interface is inacceptable!");
+		ret = FALSE;
+		goto release;
+	}
+
+	if (quota->roaming_type < RESOURCED_ROAMING_UNKNOWN ||
+	    quota->roaming_type >= RESOURCED_ROAMING_LAST_ELEM ||
+	    (quota->roaming_type == RESOURCED_ROAMING_UNKNOWN &&
+	     quota->iftype == RESOURCED_IFACE_DATACALL))
+	{
+		_E("Bad roaming!");
+		ret = FALSE;
+		goto release;
+	}
 
 	quota->snd_warning_threshold = _evaluate_warning_threshold(
 		quota->snd_quota, quota->time_period,
@@ -430,13 +427,19 @@ static dbus_bool_t deserialize_quota(
 	quota->rcv_warning_threshold = _evaluate_warning_threshold(
 		quota->rcv_quota, quota->time_period,
 		quota->rcv_warning_threshold);
+	_D("calculated snd_warning_threshold %d", quota->snd_warning_threshold);
+	_D("calculated rcv_warning_threshold %d", quota->rcv_warning_threshold);
 
-return ret;
+release:
+
+	dbus_error_free(&err);
+	return ret;
 }
 
 static dbus_bool_t deserialize_remove_quota(
 	DBusMessage *msg, char **appid,
-	resourced_iface_type *iftype, resourced_roaming_type *roaming)
+	resourced_iface_type *iftype, resourced_roaming_type *roaming,
+	char **imsi, resourced_state_t *ground)
 {
 	DBusError err;
 	dbus_error_init(&err);
@@ -446,6 +449,8 @@ static dbus_bool_t deserialize_remove_quota(
 		DBUS_TYPE_STRING, appid,
 		DBUS_TYPE_INT32, iftype,
 		DBUS_TYPE_INT32, roaming,
+		DBUS_TYPE_STRING, imsi,
+		DBUS_TYPE_INT32, ground,
 		DBUS_TYPE_INVALID);
 	if (ret == FALSE) {
 		_E("Can't deserialize remove quota message! [%s:%s]\n",
@@ -504,7 +509,7 @@ static int init_datausage_quota_remove(sqlite3 *db)
 	if (datausage_quota_remove)
 		return SQLITE_OK;
 
-	 rc = sqlite3_prepare_v2(db, REMOVE_QUOTA, -1,
+	rc = sqlite3_prepare_v2(db, REMOVE_QUOTA, -1,
 			&datausage_quota_remove, NULL);
 	if (rc != SQLITE_OK) {
 		_E("can not prepare datausage_quota_remove");
@@ -517,7 +522,8 @@ static int init_datausage_quota_remove(sqlite3 *db)
 }
 
 static resourced_ret_c remove_quota(const char *app_id,
-	resourced_iface_type iftype, resourced_roaming_type roaming)
+	resourced_iface_type iftype, resourced_roaming_type roaming,
+	char *imsi_hash, const resourced_state_t ground)
 {
 	resourced_ret_c error_code = RESOURCED_ERROR_NONE;
 	libresourced_db_initialize_once();
@@ -546,8 +552,24 @@ static resourced_ret_c remove_quota(const char *app_id,
 
 	if (sqlite3_bind_int(datausage_quota_remove, 3, roaming)
 	    != SQLITE_OK) {
-		_E("Can not bind iftype:%d for preparing statement",
+		_E("Can not bind roaming:%d for preparing statement",
 			roaming);
+		error_code =  RESOURCED_ERROR_DB_FAILED;
+		goto out;
+	}
+
+	if (sqlite3_bind_text(datausage_quota_remove, 4, imsi_hash,  -1, SQLITE_STATIC)
+	    != SQLITE_OK) {
+		_E("Can not bind subscriber_id:%s for preparing statement",
+			imsi_hash);
+		error_code =  RESOURCED_ERROR_DB_FAILED;
+		goto out;
+	}
+
+	if (sqlite3_bind_int(datausage_quota_remove, 5, ground)
+	    != SQLITE_OK) {
+		_E("Can not bind ground:%d for preparing statement",
+			ground);
 		error_code =  RESOURCED_ERROR_DB_FAILED;
 		goto out;
 	}
@@ -558,7 +580,8 @@ static resourced_ret_c remove_quota(const char *app_id,
 		goto out;
 	}
 
-	restriction_set_status(RESTRICTION_STATE_UNSET);
+	if (!check_event_in_current_modem(imsi_hash, iftype))
+		check_and_clear_all_noti();
 
 	_SD("quota for app %s removed", app_id);
 
@@ -570,11 +593,25 @@ out:
 static DBusMessage *edbus_remove_quota(E_DBus_Object *obj, DBusMessage *msg)
 {
 	char *app_id = NULL;
+	char *imsi_hash = NULL;
+	int quota_id = 0;
 	resourced_iface_type iftype;
+	resourced_state_t ground;
 	resourced_ret_c ret = RESOURCED_ERROR_NONE;
 	resourced_roaming_type roaming;
 	DBusMessage *reply;
 	DBusMessageIter iter;
+	struct shared_modules_data *m_data = get_shared_modules_data();
+	struct counter_arg *carg;
+
+	if (!m_data || !m_data->carg) {
+		_E("Not enough local parameters: modules data %p, counter arg %p",
+			m_data, m_data->carg);
+		ret = RESOURCED_ERROR_INVALID_PARAMETER;
+		goto remove_out;
+	}
+
+	carg = m_data->carg;
 
 	if (dbus_message_is_method_call(msg, RESOURCED_INTERFACE_NETWORK,
 				RESOURCED_NETWORK_REMOVE_QUOTA) == 0) {
@@ -582,14 +619,28 @@ static DBusMessage *edbus_remove_quota(E_DBus_Object *obj, DBusMessage *msg)
 		goto remove_out;
 	}
 
-	if (deserialize_remove_quota(msg, &app_id, &iftype, &roaming)
+	if (deserialize_remove_quota(msg, &app_id, &iftype, &roaming, &imsi_hash, &ground)
 			     == FALSE) {
 		ret = RESOURCED_ERROR_INVALID_PARAMETER;
 		goto remove_out;
 	}
 
-	ret = remove_quota(app_id, iftype, roaming);
-	update_quota_state(app_id, iftype, 0, 0, roaming);
+	ret = remove_quota(app_id, iftype, roaming, imsi_hash, ground);
+	if (check_quota_applied(app_id, iftype, roaming, imsi_hash, ground, &quota_id)) {
+		ret = remove_restriction_local(app_id, iftype, quota_id,
+				imsi_hash, ground);
+		if (ret == RESOURCED_ERROR_NONE)
+			_D("Quota was applied and restriction was removed successfully.");
+		else
+			_E("Can't remove rules for restrictions");
+		/* move background processes from BACKGROUND cgroup to
+		 * their own cgroup */
+		foreground_apps(carg);
+	}
+
+	remove_quota_from_counting(app_id, iftype, roaming, imsi_hash);
+	clear_effective_quota(app_id, iftype, roaming, imsi_hash);
+	SET_BIT(carg->opts->state, RESOURCED_CHECK_QUOTA);
 
 remove_out:
 	reply = dbus_message_new_method_return(msg);
@@ -618,7 +669,7 @@ static int init_datausage_quota_insert(sqlite3 *db)
 }
 
 static resourced_ret_c store_quota(const char *app_id,
-	const struct serialization_quota *quota)
+	const struct serialization_quota *quota, int *quota_id)
 {
 	resourced_ret_c error_code = RESOURCED_ERROR_NONE;
 
@@ -631,7 +682,7 @@ static resourced_ret_c store_quota(const char *app_id,
 	}
 
 	if (sqlite3_bind_text(datausage_quota_insert, 1, app_id, -1,
-		SQLITE_STATIC) != SQLITE_OK) {
+		SQLITE_TRANSIENT) != SQLITE_OK) {
 		_SE("Can not bind app_id: %s for prepearing statement: %s",
 			app_id, sqlite3_errmsg(resourced_get_database()));
 		error_code = RESOURCED_ERROR_DB_FAILED;
@@ -696,8 +747,24 @@ static resourced_ret_c store_quota(const char *app_id,
 
 	if (sqlite3_bind_int(datausage_quota_insert, 9,
 		quota->roaming_type) != SQLITE_OK) {
-		_E("Can not bind start_time: %d for preparing statement",
-			quota->start_time);
+		_E("Can not bind roaming_type %d for preparing statement",
+			quota->roaming_type);
+		error_code = RESOURCED_ERROR_DB_FAILED;
+		goto out;
+	}
+
+	if (sqlite3_bind_text(datausage_quota_insert, 10,
+		quota->imsi_hash, -1, SQLITE_TRANSIENT) != SQLITE_OK) {
+		_E("Can not bind subscriber_id: %s for preparing statement",
+			quota->imsi_hash);
+		error_code = RESOURCED_ERROR_DB_FAILED;
+		goto out;
+	}
+
+	if (sqlite3_bind_int(datausage_quota_insert, 11,
+		quota->quota_type) != SQLITE_OK) {
+		_E("Can not bind quota_type %d for preparing statement",
+			quota->quota_type);
 		error_code = RESOURCED_ERROR_DB_FAILED;
 		goto out;
 	}
@@ -708,6 +775,8 @@ static resourced_ret_c store_quota(const char *app_id,
 		error_code = RESOURCED_ERROR_DB_FAILED;
 		goto out;
 	}
+
+	*quota_id = sqlite3_last_insert_rowid(resourced_get_database());
 out:
 	sqlite3_reset(datausage_quota_insert);
 	return error_code;
@@ -719,6 +788,7 @@ static DBusMessage *edbus_create_quota(E_DBus_Object *obj, DBusMessage *msg)
 	DBusMessageIter iter;
 
 	char *app_id = NULL;
+	int quota_id;
 	struct serialization_quota quota;
 	struct shared_modules_data *m_data = get_shared_modules_data();
 	struct counter_arg *carg;
@@ -740,22 +810,24 @@ static DBusMessage *edbus_create_quota(E_DBus_Object *obj, DBusMessage *msg)
 		goto update_out;
 	}
 
-	deserialize_quota(msg, &app_id, &quota);
-	ret = store_quota(app_id, &quota);
+	if (deserialize_quota(msg, &app_id, &quota) != TRUE) {
+		_E("Cant' deserialize quota");
+		goto update_out;
+	}
+	ret = store_quota(app_id, &quota, &quota_id);
 	if (ret != RESOURCED_ERROR_NONE) {
 		_E("Can't store quota!");
 		goto update_out;
 	}
 
-	update_quota_state(app_id, quota.iftype, quota.start_time,
-		quota.time_period, quota.roaming_type);
+	update_quota_state(app_id, quota_id, &quota);
 
 	ret_value_msg_if(!carg->opts,
 		dbus_message_new_error(msg, DBUS_ERROR_INVALID_ARGS,
 				      "Counter args is not provided"),
 			 "Please provide valid argument!");
 
-	carg->opts->is_update_quota = 1;
+	SET_BIT(carg->opts->state, RESOURCED_CHECK_QUOTA);
 	reschedule_count_timer(carg, 0);
 	_SD("Datausage quota changed");
 
@@ -823,9 +895,9 @@ static void prepare_response(struct get_stats_context *ctx)
 		dbus_message_iter_append_basic(&sub, DBUS_TYPE_INT32, &info->interval->from);
 		dbus_message_iter_append_basic(&sub, DBUS_TYPE_INT32, &info->interval->to);
 		/* incoming bytes */
-		dbus_message_iter_append_basic(&sub, DBUS_TYPE_UINT64, &info->foreground.cnt.incoming_bytes);
+		dbus_message_iter_append_basic(&sub, DBUS_TYPE_UINT64, &info->cnt.incoming_bytes);
 		/* outgoing bytes */
-		dbus_message_iter_append_basic(&sub, DBUS_TYPE_UINT64, &info->foreground.cnt.outgoing_bytes);
+		dbus_message_iter_append_basic(&sub, DBUS_TYPE_UINT64, &info->cnt.outgoing_bytes);
 
 		dbus_message_iter_append_basic(&sub, DBUS_TYPE_INT32, &info->roaming);
 		dbus_message_iter_append_basic(&sub, DBUS_TYPE_INT32, &info->hw_net_protocol_type);
@@ -919,24 +991,95 @@ static inline char *_get_public_appid(const uint32_t classid)
 
 static bool need_flush_immediatelly(sig_atomic_t state)
 {
-	return state & RESOURCED_FORCIBLY_FLUSH_STATE ||
-		state & RESOURCED_FORCIBLY_QUIT_STATE;
+	return CHECK_BIT(state, RESOURCED_FORCIBLY_FLUSH_STATE) ||
+		CHECK_BIT(state, RESOURCED_FORCIBLY_QUIT_STATE);
 }
 
-static Eina_Bool _store_and_free_result_cb(void *user_data)
+static void free_restriction_info(void *data)
+{
+	resourced_restriction_info *info = (resourced_restriction_info *)data;
+	if (!info)
+		return;
+	if (info->app_id)
+		free((char *)info->app_id);
+	if (info->ifname)
+		free((char *)info->ifname);
+	if (info->imsi)
+		free((char *)info->imsi);
+}
+
+static void store_restrictions(struct counter_arg *arg)
+{
+	GSList *rst_list = NULL, *iter = NULL;
+
+	/* find restrictions in nf_cntrs tree, which were active */
+	extract_restriction_list(arg, &rst_list);
+
+	_D("Store restrictions!");
+
+	gslist_for_each_item(iter, rst_list) {
+		resourced_restriction_info *info = (resourced_restriction_info *)iter->data;
+
+		/* when we moved to only one restriction counter,
+		 * one of rcv_limit or send_limit value could be
+		 * 0, !info->send_limit
+		 */
+		if (!info->rcv_limit) {
+			_D("Nothing to store");
+			continue;
+		}
+
+		/* roaming couldn't change without chaning of network interface
+		 * undefined behavior here is roaming updated before interface down
+		 * we could get here incorrect restriction and fail update it
+		 * If it changes before need to keep roaming in nfacct_value
+		 */
+		update_restriction_db(info->app_id, info->iftype,
+				      info->rcv_limit, info->send_limit,
+				      info->rst_state, info->quota_id,
+				      info->roaming, info->ifname, info->imsi);
+	}
+
+	g_slist_free_full(rst_list, free_restriction_info);
+}
+
+static bool check_flush_time(time_t flush_period, time_t last_time)
+{
+	time_t cur_time;
+	time(&cur_time);
+	return cur_time - last_time <= flush_period - 1;
+}
+
+static Eina_Bool store_and_free_result_cb(void *user_data)
 {
 	struct counter_arg *arg = (struct counter_arg *)user_data;
+	resourced_ret_c ret;
 
 	ret_value_msg_if(!arg, ECORE_CALLBACK_CANCEL, "Please provide valid argument!");
 
-	if (store_result(arg->result, need_flush_immediatelly(arg->opts->state)
-			 ? 0 : arg->opts->flush_period)) {
+	if (check_flush_time(arg->opts->flush_period, arg->last_run_time) &&
+	    !need_flush_immediatelly(arg->opts->state))
+		goto quit_counter;
+
+	/* It's dangerouse to store restriction every counting cycle,
+	 * 1. we need to request it without reset cmd
+	 * 2. we using nf_cntrs, and it  case restriction wasn't modified, we
+	 * couldn't determine it, and we'll store it
+	 * 3. need to fix fill_restriction in answer_func_cb,
+	 * to nulify nf_cntrs */
+	if ((CHECK_BIT(arg->opts->state, RESOURCED_FORCIBLY_FLUSH_STATE) ||
+	    CHECK_BIT(arg->opts->state, RESOURCED_FORCIBLY_QUIT_STATE)) &&
+	    !CHECK_BIT(arg->opts->state, RESOURCED_CHECK_QUOTA))
+		store_restrictions(arg);
+
+	ret = store_result(arg->result);
+	if (ret == RESOURCED_ERROR_NONE) {
 		/*We still plan to use result outside, just
 		remove and free elements */
 		g_tree_ref(arg->result->tree);
 		free_app_stat_tree(arg->result);
-		if (arg->opts->state & RESOURCED_FORCIBLY_FLUSH_STATE) {
-			arg->opts->state &= ~RESOURCED_FORCIBLY_FLUSH_STATE;
+		if (CHECK_BIT(arg->opts->state, RESOURCED_UPDATE_REQUESTED)) {
+			UNSET_BIT(arg->opts->state, RESOURCED_UPDATE_REQUESTED);
 			if (broadcast_edbus_signal(
 				    RESOURCED_PATH_NETWORK,
 				    RESOURCED_INTERFACE_NETWORK,
@@ -946,15 +1089,43 @@ static Eina_Bool _store_and_free_result_cb(void *user_data)
 		}
 	}
 
+	arg->serialized_counters = 0;
+	time(&(arg->last_run_time));
+
+quit_counter:
 	arg->store_result_timer = NULL;
+
+	/*
+	 * it's latest counter code for async operations,
+	 * so here could be exit
+	 */
+	UNSET_BIT(arg->opts->state, RESOURCED_FORCIBLY_FLUSH_STATE);
+	UNSET_BIT(arg->opts->state, RESOURCED_CHECK_QUOTA);
+
+	/*
+	 * timer for quit is scheduled in sig term handler, but it has 1 sec delay,
+	 * if we finished early we could quit here
+	 */
+	if (CHECK_BIT(arg->opts->state, RESOURCED_FORCIBLY_QUIT_STATE))
+		ecore_main_loop_quit();
 	return ECORE_CALLBACK_CANCEL;
 }
 
-static void _store_and_free_result(struct counter_arg *arg)
+static void store_and_free_result(struct counter_arg *arg)
 {
+	if (need_flush_immediatelly(arg->opts->state)) {
+		if (arg->store_result_timer)
+			ecore_timer_delay(arg->store_result_timer,
+			0 - ecore_timer_pending_get(arg->store_result_timer));
+		else
+			arg->store_result_timer = ecore_timer_add(0,
+					store_and_free_result_cb, arg);
+		return;
+	}
+
 	if (!arg->store_result_timer)
-		arg->store_result_timer = ecore_timer_add(STORE_DELAY_INTERVAL,
-					   _store_and_free_result_cb, arg);
+		arg->store_result_timer = ecore_timer_add(0,
+					   store_and_free_result_cb, arg);
 }
 
 static void _process_network_counter(struct nl_family_params *params)
@@ -979,34 +1150,23 @@ static void _process_network_counter(struct nl_family_params *params)
 
 	netlink->deserialize_answer(&(netlink->params));
 
-	/* process only filled in/out or tethering traffic */
-	if ((!g_tree_nnodes(params->carg->in_tree) ||
-	     !g_tree_nnodes(params->carg->out_tree)) &&
-	    params->carg->opts->state & RESOURCED_FORCIBLY_QUIT_STATE)
-		return;
 
-	pthread_rwlock_wrlock(&params->carg->result->guard);
-	ret = prepare_application_stat(params->carg->in_tree,
-			params->carg->out_tree, params->carg->result,
-		params->carg->opts);
-	pthread_rwlock_unlock(&params->carg->result->guard);
-
-	if (ret != RESOURCED_ERROR_NONE) {
-		_E("Failed to prepare application statistics!");
+	if (!params->carg->serialized_counters &&
+	    !CHECK_BIT(params->carg->opts->state,
+		       RESOURCED_CHECK_QUOTA)) {
+		/* it could be due, 0 value for all counters
+		 * or due 0 payload in netlink response */
+		_D("There is no serialized counters in response");
 		return;
 	}
-	ret = process_quota(params->carg->result, params->carg->opts);
+
+	ret = process_quota(params->carg);
 	if (ret != 0) {
 		_E("Failed to process quota!");
 		return;
 	}
 
-	_store_and_free_result(params->carg);
-
-	g_tree_ref(params->carg->out_tree);
-	free_traffic_stat_tree(params->carg->out_tree);
-	g_tree_ref(params->carg->in_tree);
-	free_traffic_stat_tree(params->carg->in_tree);
+	store_and_free_result(params->carg);
 }
 
 #ifdef CONFIG_DATAUSAGE_NFACCT
@@ -1025,6 +1185,7 @@ static void _process_restriction(struct nl_family_params *cmd)
 	char *app_id = NULL;
 	resourced_iface_type iftype;
 	resourced_restriction_info rst_info = {0,};
+	data_usage_quota du_quota = {0};
 	resourced_ret_c ret;
 
 	_D("Restriction notification");
@@ -1043,16 +1204,19 @@ static void _process_restriction(struct nl_family_params *cmd)
 	ret_msg_if(ret != RESOURCED_ERROR_NONE,
 		"Failed to get restriction info!");
 
+	get_quota_by_id(rst_info.quota_id, &du_quota);
+	_D("quota rcv: %d, send: %d", du_quota.rcv_quota, du_quota.snd_quota);
+
 	if (notification_type == RESTRICTION_NOTI_C_ACTIVE) {
 		if (rst_info.quota_id != NONE_QUOTA_ID)
-			send_restriction_notification(app_id);
+			send_restriction_notification(app_id, &du_quota);
 		update_restriction_db(app_id, iftype, 0, 0,
 				      RESOURCED_RESTRICTION_ACTIVATED,
-		rst_info.quota_id, rst_info.roaming);
+		rst_info.quota_id, rst_info.roaming, rst_info.ifname, rst_info.imsi);
 	} else if (notification_type == RESTRICTION_NOTI_C_WARNING) {
 		/* nested if due error message correctness */
 		if (rst_info.quota_id != NONE_QUOTA_ID)
-			send_restriction_warn_notification(app_id);
+			send_restriction_warn_notification(app_id, &du_quota);
 	} else
 		_E("Unkown restriction notification type");
 }
@@ -1170,7 +1334,6 @@ release_sock:
 }
 #endif /* CONFIG_DATAUSAGE_NFACCT */
 
-
 int resourced_init_counter_func(struct counter_arg *carg)
 {
 	int error = 0;
@@ -1186,8 +1349,6 @@ int resourced_init_counter_func(struct counter_arg *carg)
 			 "Couldn't init socket!");
 
 	carg->result = create_app_stat_tree();
-	carg->in_tree = create_traffic_stat_tree();
-	carg->out_tree = create_traffic_stat_tree();
 #ifdef CONFIG_DATAUSAGE_NFACCT
 	carg->nf_cntrs = create_nfacct_tree();
 #endif /* CONFIG_DATAUSAGE_NFACCT */
@@ -1236,11 +1397,10 @@ static void finalize_quota_remove(void)
 void resourced_finalize_counter_func(struct counter_arg *carg)
 {
 	ret_msg_if(carg == NULL, "Invalid counter argument\n");
-	free_traffic_stat_tree(carg->out_tree);
-	free_traffic_stat_tree(carg->in_tree);
 	nulify_app_stat_tree(&carg->result);
 	ecore_main_fd_handler_del(carg->ecore_fd_handler);
 	ecore_timer_del(carg->ecore_timer);
+	close(carg->sock);
 	finalize_quota_insert();
 	finalize_quota_remove();
 }

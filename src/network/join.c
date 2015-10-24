@@ -30,14 +30,6 @@
 #include "macro.h"
 #include "trace.h"
 
-#ifdef NETWORK_SERVICE_OFF
-API resourced_ret_c join_app_performance(const char *app_id, const pid_t pid)
-{
-	return RESOURCED_ERROR_NONE;
-}
-
-#else
-
 static resourced_ret_c send_join_message(const char *interface,
 	const char *format_str,	char *params[])
 {
@@ -88,4 +80,3 @@ API resourced_ret_c join_app_performance(const char *app_id, const pid_t pid)
 
 	return send_join_message(RESOURCED_NETWORK_JOIN_NET_STAT, "sd", params);
 }
-#endif

@@ -24,16 +24,26 @@
  * @desc application statistics entity helper functions
  */
 
+#include <inttypes.h>
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
 
 #include "app-stat.h"
+#include "counter.h"
+#include "datausage-common.h"
 #include "net-cls-cgroup.h"
 #include "iface.h"
 #include "macro.h"
-#include "roaming.h"
+#include "telephony.h"
 #include "trace.h"
+#include "notifier.h"
+#include "proc-common.h"
+#ifdef CONFIG_DATAUSAGE_NFACCT
+#include "nfacct-rule.h"
+#else
+#include "genl.h"
+#endif
 
 static void free_app(gpointer data)
 {
@@ -52,22 +62,23 @@ static gint compare_classid(gconstpointer a, gconstpointer b,
 {
 	const struct classid_iftype_key *a_key = (struct classid_iftype_key*)a;
 	const struct classid_iftype_key *b_key = (struct classid_iftype_key*)b;
-	gint ret = 0;
+	gint ret = a_key->classid - b_key->classid;
 
-	ret = a_key->classid - b_key->classid;
-	if (!ret)
+	if (ret)
 		return ret;
 
 	ret = a_key->iftype - b_key->iftype;
-	if (!ret)
+	if (ret)
 		return ret;
 
-	return strcmp(a_key->ifname, b_key->ifname);
-}
+	ret = (a_key->ifname && b_key->ifname) ?
+		strcmp(a_key->ifname, b_key->ifname) : 0;
 
-static void free_stat(gpointer data)
-{
-	free(data);
+	if (ret)
+		return ret;
+
+	return (a_key->imsi && b_key->imsi) ?
+		strcmp(a_key->imsi, b_key->imsi) : 0;
 }
 
 struct application_stat_tree *create_app_stat_tree(void)
@@ -85,13 +96,12 @@ struct application_stat_tree *create_app_stat_tree(void)
 
 	app_stat_tree->tree =
 		(GTree *)g_tree_new_full(compare_classid,
-							 NULL, free_stat,
+							 NULL, free,
 							 free_app);
 	app_stat_tree->last_touch_time = time(0);
 	ret = pthread_rwlock_init(&app_stat_tree->guard, NULL);
 	if (ret != 0) {
-		strerror_r(ret, buf, sizeof(buf));
-		_E("Could not initialize tree guard %s.", buf);
+		_E("Could not initialize tree guard %s.", strerror_r(ret, buf, sizeof(buf)));
 		free(app_stat_tree);
 		app_stat_tree = NULL;
 	}
@@ -113,16 +123,6 @@ void nulify_app_stat_tree(struct application_stat_tree **app_stat_tree)
 	*app_stat_tree = NULL;
 }
 
-traffic_stat_tree *create_traffic_stat_tree(void)
-{
-	return g_tree_new_full(compare_classid, NULL, NULL, free_stat);
-}
-
-void free_traffic_stat_tree(traffic_stat_tree *tree)
-{
-	g_tree_destroy((GTree *) tree);
-}
-
 static gboolean set_app_id(gpointer key, gpointer value,
 	void __attribute__((__unused__)) *data)
 {
@@ -141,81 +141,174 @@ static inline void identify_application(
 	g_tree_foreach(app_stat_tree->tree, (GTraverseFunc)set_app_id, NULL);
 }
 
-static gboolean fill_incomming(gpointer key,
-	gpointer value, gpointer data)
-{
-	struct application_stat_tree *app_tree =
-		(struct application_stat_tree *)data;
-	struct traffic_stat *in_event = (struct traffic_stat *)value;
+#ifdef CONFIG_DATAUSAGE_NFACCT
 
+static void fill_nfacct_counter(struct nfacct_rule *counter, uint64_t bytes)
+{
+	struct classid_iftype_key *key;
+	struct classid_iftype_key search_key = {0};
+	struct counter_arg *carg = counter->carg;
+	struct application_stat_tree *app_tree =
+		(struct application_stat_tree *)carg->result;
 	struct application_stat *app_stat = NULL;
-	if (!is_allowed_ifindex(in_event->ifindex))
-		return FALSE;
+	struct proc_status ps = {0};
+
+	search_key.classid = counter->classid;
+	search_key.iftype = counter->iftype;
+	STRING_SAVE_COPY(search_key.ifname, counter->ifname);
+	search_key.imsi = counter->iftype == RESOURCED_IFACE_DATACALL ?
+		get_current_modem_imsi() : ""; /* we'll not free it */
 
 	app_stat = (struct application_stat *)
-		g_tree_lookup((GTree *)app_tree->tree, key);
-	if (app_stat)
-		app_stat->rcv_count += in_event->bytes;
-	else {
+		g_tree_lookup((GTree *)app_tree->tree, &search_key);
+
+	if (!app_stat) {
+		key = g_new(struct classid_iftype_key, 1);
+
+		if (!key) {
+			_D("g_new alloc error\n");
+			return;
+		}
+		memcpy(key, &search_key, sizeof(struct classid_iftype_key));
+		STRING_SAVE_COPY(key->ifname, search_key.ifname);
+
 		app_stat = g_new(struct application_stat, 1);
+		if (!app_stat) {
+			_D("g_new alloc error\n");
+			g_free((gpointer)key);
+			return;
+		}
 		memset(app_stat, 0, sizeof(struct application_stat));
-		app_stat->rcv_count = in_event->bytes;
-		g_tree_insert((GTree *)app_tree->tree, key, app_stat);
+		g_tree_insert((GTree *)app_tree->tree, (gpointer)key, (gpointer)app_stat);
+		_D("new app stat for classid %u\n", counter->classid);
+	} else {
+		_D("app stat for classid %d found in tree", search_key.classid);
+		_D("app stats app id %s", app_stat->application_id);
+		_D("counter intend %d", counter->intend);
 	}
-	app_stat->delta_rcv += in_event->bytes;
 
-	/*only for debug purpose*/
-	if (!app_stat->ifindex)
-		app_stat->ifindex = in_event->ifindex;
+	if (counter->iotype == NFACCT_COUNTER_IN) {
+		app_stat->delta_rcv += bytes; /* += because we could update
+						 counters several times before
+						 flush it */
+		app_stat->rcv_count += bytes; /* for different update/flush interval
+						 in quota processing,
+						 quota nulifies it and flush operation
+						 as well, so 2 counters */
+	} else if (counter->iotype == NFACCT_COUNTER_OUT) {
+		app_stat->delta_rcv += bytes;
+		app_stat->rcv_count += bytes;
+	}
 
-	app_stat->is_roaming = get_roaming();
-	return FALSE;
+	app_stat->is_roaming = get_current_roaming();
+	if (!app_stat->application_id)
+		app_stat->application_id = get_app_id_by_classid(counter->classid, false);
+	app_stat->ground = get_app_ground(counter);
+
+	ps.appid = app_stat->application_id;
+	ps.pai = find_app_info_by_appid(ps.appid);
+
+	if (ps.pai && ps.pai->state == PROC_STATE_SUSPEND) {
+		ps.pid = ps.pai->main_pid;
+		resourced_notify(RESOURCED_NOTIFIER_APP_WAKEUP, &ps);
+	}
 }
 
-static gboolean fill_outgoing(gpointer key,
-	gpointer value, gpointer data)
+static void fill_nfacct_restriction(struct nfacct_rule *counter, uint64_t bytes)
 {
+	/* update db from here ? */
+	_D("byte for restriction %" PRIu64 " ", bytes);
+	update_counter_quota_value(counter, bytes);
+}
+
+void fill_nfacct_result(char *cnt_name, uint64_t bytes,
+			struct counter_arg *carg)
+{
+	struct nfacct_rule counter = {
+		.carg = carg,
+		.name = {0},
+		.ifname = {0},
+		0, };
+
+	_D("cnt_name %s", cnt_name);
+
+	if (!recreate_counter_by_name(cnt_name, &counter)) {
+		_E("Can't parse counter name %s", cnt_name);
+		return;
+	}
+
+	_D("classid %u, iftype %u, iotype %d, intend %d, ifname %s, bytes %lu",
+	   counter.classid, counter.iftype, counter.iotype, counter.intend, counter.ifname, bytes);
+
+	if (counter.iotype == NFACCT_COUNTER_UNKNOWN) {
+		_D("Counter type is not supported!");
+		return;
+	}
+	if (counter.intend == NFACCT_COUNTER ||
+	    counter.intend == NFACCT_TETH_COUNTER) {
+		return fill_nfacct_counter(&counter, bytes);
+	} else if (counter.intend == NFACCT_BLOCK)
+		return fill_nfacct_restriction(&counter, bytes);
+}
+#else
+API void fill_app_stat_result(int ifindex, int classid, uint64_t bytes, int iotype,
+			  struct counter_arg *carg)
+{
+	struct classid_iftype_key *key;
+	struct classid_iftype_key search_key = {0};
+	char *ifname;
+
 	struct application_stat_tree *app_tree =
-		(struct application_stat_tree *)data;
-	struct traffic_stat *out_event = (struct traffic_stat *)value;
+		(struct application_stat_tree *)carg->result;
+	struct application_stat *app_stat = NULL;
 
-	struct application_stat *app_stat = (struct application_stat *)
-		g_tree_lookup((GTree *)app_tree->tree, key);
-	if (app_stat)
-		app_stat->snd_count += out_event->bytes;
-	else {
+	search_key.classid = classid;
+	search_key.iftype = get_iftype(ifindex);
+	ifname = get_iftype_name(search_key.iftype);
+	STRING_SAVE_COPY(search_key.ifname, ifname);
+	search_key.imsi = search_key.iftype == RESOURCED_IFACE_DATACALL ?
+		get_current_modem_imsi() : ""; /* we'll not free it */
+
+	app_stat = (struct application_stat *)
+		g_tree_lookup((GTree *)app_tree->tree, &search_key);
+
+	if (!app_stat) {
+		key = g_new(struct classid_iftype_key, 1);
+
+		if (!key) {
+			_D("g_new alloc error\n");
+			return;
+		}
+		memcpy(key, &search_key, sizeof(struct classid_iftype_key));
+		STRING_SAVE_COPY(key->ifname, search_key.ifname);
+
 		app_stat = g_new(struct application_stat, 1);
+		if (!app_stat) {
+			_D("g_new alloc error\n");
+			g_free((gpointer)key);
+			return;
+		}
 		memset(app_stat, 0, sizeof(struct application_stat));
-		app_stat->snd_count = out_event->bytes;
-		g_tree_insert((GTree *)app_tree->tree, key, app_stat);
+		g_tree_insert((GTree *)app_tree->tree, (gpointer)key, (gpointer)app_stat);
+		_D("new app stat for classid %u\n", classid);
 	}
-	app_stat->delta_snd += out_event->bytes;
 
-	if (!app_stat->ifindex)
-		app_stat->ifindex = out_event->ifindex;
+	if (iotype == TRAF_STAT_C_GET_CONN_IN) {
+		app_stat->delta_rcv += bytes; /* += because we could update
+						 counters several times before
+						 flush it */
+		app_stat->rcv_count += bytes; /* for different update/flush interval
+						 in quota processing,
+						 quota nulifies it and flush operation
+						 as well, so 2 counters */
+	} else if (iotype == TRAF_STAT_C_GET_PID_OUT) {
+		app_stat->delta_snd += bytes;
+		app_stat->snd_count += bytes;
+	}
 
-	if (!app_stat->is_roaming)
-		app_stat->is_roaming = get_roaming();
-	return FALSE;
+	app_stat->is_roaming = get_current_roaming();
+	if (!app_stat->application_id)
+		app_stat->application_id = get_app_id_by_classid(classid, false);
+
 }
-
-
-static void fill_result(traffic_stat_tree *tree_in,
-		traffic_stat_tree *tree_out,
-		struct application_stat_tree *result)
-{
-
-	g_tree_foreach(tree_in, (GTraverseFunc)fill_incomming, result);
-	g_tree_foreach(tree_out, (GTraverseFunc)fill_outgoing, result);
-}
-
-resourced_ret_c prepare_application_stat(traffic_stat_tree *tree_in,
-			     traffic_stat_tree *tree_out,
-			     struct application_stat_tree *result,
-			     volatile struct daemon_opts *opts)
-{
-	fill_result(tree_in, tree_out, result);
-	identify_application(result);
-
-	return RESOURCED_ERROR_NONE;
-}
+#endif /* CONFIG_DATAUSAGE_NFACCT */

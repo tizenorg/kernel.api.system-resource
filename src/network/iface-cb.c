@@ -193,15 +193,6 @@ handle_error:
 	return -error;
 }
 
-static void apply_iface_options(void)
-{
-	resourced_options options = { 0 };
-
-	load_options(&options);
-	set_wifi_allowance(options.wifi);
-	set_datacall_allowance(options.datacall);
-}
-
 int resourced_iface_init(void)
 {
 	ifcallbacks = create_iface_callback();
@@ -217,7 +208,6 @@ int resourced_iface_init(void)
 		(void *)ifcallbacks, NULL, NULL);
 	ret_value_msg_if(iface_ecore_fd_handler == NULL, RESOURCED_ERROR_FAIL,
 			 "Failed to add iface callbacks\n");
-	apply_iface_options();
 	return RESOURCED_ERROR_NONE;
 }
 
@@ -227,6 +217,5 @@ void resourced_iface_finalize(void)
 	ecore_main_fd_handler_del(iface_ecore_fd_handler);
 	shutdown(iface_fd, 2);
 	close(iface_fd);
-	finalize_iftypes();
 	g_list_free_full(ifcallbacks, free);
 }
