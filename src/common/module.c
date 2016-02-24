@@ -80,56 +80,33 @@ void modules_check_runtime_support(void UNUSED *data)
 	}
 }
 
-static void module_initcall_level(void *data, int priority)
+void modules_init(void *data)
 {
 	GSList *iter;
-	struct module_ops *module;
+	const struct module_ops *module;
 	int ret_code = RESOURCED_ERROR_NONE;
 
 	gslist_for_each_item(iter, modules_list) {
 		module = (struct module_ops *)iter->data;
-		if (priority != MODULE_PRIORITY_ALL &&
-		    module->priority != priority)
-			continue;
-		if (module->init && !module->initalized) {
-			_D("Initialized [%s] module\n", module->name);
+		_D("Initialize [%s] module\n", module->name);
+		if (module->init)
 			ret_code = module->init(data);
-			module->initalized = MODULE_INITIALIZED;
-		}
 		if (ret_code < 0)
 			_E("Fail to initialize [%s] module\n", module->name);
 	}
 }
 
-void modules_init(void *data)
-{
-	module_initcall_level(data, MODULE_PRIORITY_ALL);
-}
-
-void modules_early_init(void *data)
-{
-	module_initcall_level(data, MODULE_PRIORITY_EARLY);
-}
-
-void modules_late_init(void *data)
-{
-	module_initcall_level(data, MODULE_PRIORITY_HIGH);
-	module_initcall_level(data, MODULE_PRIORITY_NORMAL);
-}
-
 void modules_exit(void *data)
 {
 	GSList *iter;
-	struct module_ops *module;
+	const struct module_ops *module;
 	int ret_code = RESOURCED_ERROR_NONE;
 
 	gslist_for_each_item(iter, modules_list) {
 		module = (struct module_ops *)iter->data;
 		_D("Deinitialize [%s] module\n", module->name);
-		if (module->exit) {
+		if (module->exit)
 			ret_code = module->exit(data);
-			module->initalized = MODULE_NONINITIALIZED;
-		}
 		if (ret_code < 0)
 			_E("Fail to deinitialize [%s] module\n", module->name);
 	}

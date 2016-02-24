@@ -25,7 +25,7 @@
  * Copyright (c) 2015 Samsung Electronics Co., Ltd. All rights reserved.
  *
  */
-
+ 
 #include <ctype.h>
 #include <stdio.h>
 #include <stdbool.h>
@@ -44,7 +44,6 @@
 #include "procfs.h"
 #include "proc-common.h"
 #include "lowmem-common.h"
-#include "module.h"
 
 #define PAGE_SIZE_KB 4
 
@@ -136,10 +135,9 @@ int proc_get_oom_score_adj(int pid, int *oom_score_adj)
 
 int proc_set_oom_score_adj(int pid, int oom_score_adj)
 {
-	FILE *fp;
-	struct lowmem_data_type lowmem_data;
-	static const struct module_ops *lowmem;
 	char buf[sizeof(PROC_OOM_SCORE_ADJ_PATH) + MAX_DEC_SIZE(int)] = {0};
+	FILE *fp;
+	unsigned long lowmem_args[2] = {0, };
 
 	snprintf(buf, sizeof(buf), PROC_OOM_SCORE_ADJ_PATH, pid);
 	fp = fopen(buf, "r+");
@@ -152,15 +150,12 @@ int proc_set_oom_score_adj(int pid, int oom_score_adj)
 	fprintf(fp, "%d", oom_score_adj);
 	fclose(fp);
 
-	lowmem = find_module("lowmem");
-	if (lowmem && (oom_score_adj >= OOMADJ_SU)) {
-		lowmem_data.control_type = LOWMEM_MOVE_CGROUP;
-		lowmem_data.args[0] = (int)pid;
-		lowmem_data.args[1] = (int)oom_score_adj;
-		lowmem->control(&lowmem_data);
+	if (oom_score_adj >= OOMADJ_SU) {
+		lowmem_args[0] = (unsigned long)pid;
+		lowmem_args[1] = (unsigned long)oom_score_adj;
+		lowmem_control(LOWMEM_MOVE_CGROUP, lowmem_args);
 	}
-
-	return RESOURCED_ERROR_NONE;
+	return 0;
 }
 
 int proc_get_label(pid_t pid, char *label)
@@ -213,104 +208,68 @@ int proc_get_mem_usage(pid_t pid, unsigned int *vmsize, unsigned int *vmrss)
 
 unsigned int proc_get_mem_available(void)
 {
-	unsigned int mem_available, mem_free, cached;
-	int r;
-	char buf[256];
-
-	/*
-	 * Let's try to read MemAvailable, it's in kernel from 3.14,
-	 * but it's often backported. So we don't need to calculate the values
-	 * by hand.
-	 */
-	r = proc_get_meminfo("MemAvailable", &mem_available);
-	if (r < 0) {
-		_E("Failed to get MemAvailable: %s", strerror_r(-r, buf, sizeof(buf)));
-		return 0;
-	}
-
-	if (mem_available)
-		return KBYTE_TO_MBYTE(mem_available);
-
-	/*
-	 * If it's not available read and calculate the size just like
-	 * the kernel does.
-	 */
-	r = proc_get_meminfo("MemFree", &mem_free);
-	if (r < 0) {
-		_E("Failed to get MemFree: %s", strerror_r(-r, buf, sizeof(buf)));
-		return 0;
-	}
-
-	r = proc_get_meminfo("Cached", &cached);
-	if (r < 0) {
-		_E("Failed to get Cached: %s", strerror_r(-r, buf, sizeof(buf)));
-		return 0;
-	}
-
-	return KBYTE_TO_MBYTE(mem_free) + KBYTE_TO_MBYTE(cached);
-
-}
-
-int proc_get_meminfo(const char *info, unsigned int *size)
-{
-	_cleanup_fclose_ FILE *fp = NULL;
-
-	assert(size);
-	assert(info);
+	char buf[PATH_MAX];
+	FILE *fp;
+	char *idx;
+	unsigned int free = 0, cached = 0;
+	unsigned int available = 0;
+	int check_free = 1;
 
 	fp = fopen("/proc/meminfo", "r");
-	if (!fp)
-		return -errno;
 
-	while (true) {
-		_cleanup_free_ char *line = NULL, *key = NULL;
-		unsigned int v = 0;
+	if (!fp) {
+		_E("%s open failed, %d", buf, fp);
+		return available;
+	}
 
-		line = (char *)malloc(LINE_MAX);
-		if (!line)
-			return -ENOMEM;
-
-		if (!fgets(line, LINE_MAX, fp)) {
-			if (feof(fp))
-				return -ENODATA;
-
-			return ferror(fp);
+	/*
+	 * It is important to preserve the order of
+	 * reading for performance purposes.
+	 */
+	while (fgets(buf, PATH_MAX, fp) != NULL) {
+		if (check_free) {
+			idx = strstr(buf, "MemFree:");
+			if (idx) {
+				idx += strlen("MemFree:");
+				while (*idx < '0' || *idx > '9')
+					idx++;
+				free = atoi(idx);
+				check_free = 0;
+				continue;
+			}
 		}
 
-		if (sscanf(line, "%m[^:]: %u", &key, &v) < 2)
-			continue;
+		/*
+		 * MemAvailable is introduced in Linux 3.14 kernel.
+		 * If there is MemAvailable, use it instead of calculating
+		 * available memory using MemFree and Cached.
+		 */
+		idx = strstr(buf, "MemAvailable:");
+		if (idx) {
+			idx += strlen("MemAvailable:");
+			while (*idx < '0' || *idx > '9')
+				idx++;
+			available = atoi(idx);
+			break;
+		}
 
-		if (!strncmp(key, info, strlen(key))) {
-			*size = v;
+		idx = strstr(buf, "Cached:");
+		if (idx) {
+			idx += strlen("Cached:");
+			while (*idx < '0' || *idx > '9')
+				idx++;
+			cached = atoi(idx);
 			break;
 		}
 	}
 
-	return 0;
-}
+	if (available == 0)
+		available = free + cached;
 
-int proc_get_cpu_time(pid_t pid, unsigned long *utime,
-		unsigned long *stime)
-{
-	char proc_path[sizeof(PROC_STAT_PATH) + MAX_DEC_SIZE(int)];
-	_cleanup_fclose_ FILE *fp = NULL;
+	available >>= 10;
+	fclose(fp);
 
-	assert(utime != NULL);
-	assert(stime != NULL);
-
-	snprintf(proc_path, sizeof(proc_path), PROC_STAT_PATH, pid);
-	fp = fopen(proc_path, "r");
-	if (fp == NULL)
-		return RESOURCED_ERROR_FAIL;
-
-	if (fscanf(fp, "%*s %*s %*s %*s %*s %*s %*s %*s %*s %*s %*s %*s %*s") < 0) {
-		return RESOURCED_ERROR_FAIL;
-	}
-
-	if (fscanf(fp, "%lu %lu", utime, stime) < 1) {
-		return RESOURCED_ERROR_FAIL;
-	}
-	return RESOURCED_ERROR_NONE;
+	return available;
 }
 
 unsigned int proc_get_cpu_number(void)
@@ -340,7 +299,7 @@ int proc_get_exepath(pid_t pid, char *buf, int len)
 	char path[PROC_BUF_MAX];
 	int ret = 0;
 
-	snprintf(path, sizeof(path), "/proc/%d/exe", pid);
+	sprintf(path, "/proc/%d/exe", pid);
 	ret = readlink(path, buf, len-1);
 	if (ret > 0)
 		buf[ret] = '\0';
@@ -351,8 +310,8 @@ int proc_get_exepath(pid_t pid, char *buf, int len)
 
 static int proc_get_data(char *path, char *buf, int len)
 {
-	_cleanup_close_ int fd = -1;
 	int ret;
+	_cleanup_close_ int fd = -1;
 
 	fd = open(path, O_RDONLY);
 	if (fd < 0)
@@ -370,20 +329,23 @@ static int proc_get_data(char *path, char *buf, int len)
 int proc_get_raw_cmdline(pid_t pid, char *buf, int len)
 {
 	char path[PROC_BUF_MAX];
-	snprintf(path, sizeof(path), "/proc/%d/cmdline", pid);
+
+	sprintf(path, "/proc/%d/cmdline", pid);
 	return proc_get_data(path, buf, len);
 }
 
 int proc_get_stat(pid_t pid, char *buf, int len)
 {
 	char path[PROC_BUF_MAX];
-	snprintf(path, sizeof(path), "/proc/%d/stat", pid);
+
+	sprintf(path, "/proc/%d/stat", pid);
 	return proc_get_data(path, buf, len);
 }
 
 int proc_get_status(pid_t pid, char *buf, int len)
 {
 	char path[PROC_BUF_MAX];
-	snprintf(path, sizeof(path), "/proc/%d/status", pid);
+
+	sprintf(path, "/proc/%d/status", pid);
 	return proc_get_data(path, buf, len);
 }

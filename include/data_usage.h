@@ -122,7 +122,6 @@ typedef struct {
 	int rcv_warning_limit;
 	resourced_roaming_type roaming;
 	char *ifname;
-	const char *imsi;
 } resourced_net_restrictions;
 
 /**
@@ -313,7 +312,6 @@ typedef struct {
 	int send_limit;
 	int quota_id;
 	resourced_roaming_type roaming;
-	const char *imsi;
 } resourced_restriction_info;
 
 /**
@@ -378,20 +376,6 @@ resourced_ret_c remove_restriction(const char *app_id);
 
 resourced_ret_c remove_restriction_by_iftype(const char *app_id,
 					     const resourced_iface_type iftype);
-resourced_ret_c remove_restriction_full(const char *app_id,
-					const resourced_net_restrictions *restriction);
-
-
-/**
- * @desc Remove existing restriction for application
- *   It will delete restriction rule in kernel
- * @param app_id[in] - application identifier, it's package name
- * @param imsi[in] - telephony imsi
- */
-resourced_ret_c resourced_remove_restriction(const char *app_id, char *imsi);
-
-resourced_ret_c resourced_remove_restriction_by_iftype(const char *app_id,
-					     const resourced_iface_type iftype, char *imsi);
 
 /**
  * @desc Exclude restriction for application

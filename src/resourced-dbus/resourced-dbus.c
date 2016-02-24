@@ -30,6 +30,8 @@
 #include "trace.h"
 #include "resourced-dbus.h"
 
+static E_DBus_Connection *edbus_monitor_conn = NULL;
+
 /* key  : DBus system BusName */
 /* value: PID of Busname */
 /* BusName hash is 1:1 table */
@@ -76,9 +78,6 @@ unsigned int resourced_dbus_pid_get_busnames(pid_t pid, char ***busnames)
 		int i;
 
 		names = (char **)malloc(sizeof(char *) * (size_t)(g_hash_table_size(busname_hash) + 1));
-		if (!names)
-			return 0;
-
 		g_hash_table_iter_init (&iter, busname_hash);
 		for (i = 0; g_hash_table_iter_next(&iter, (void **)&busname, NULL); i++)
 			names[i] = strndup(busname, strlen(busname)+1);
@@ -352,6 +351,7 @@ static void resourced_dbus_system_hash_drop_busname(char *busname)
 	/* Drop BusName hash */
 	if (!g_hash_table_remove(dbus_system_busname_hash, busname))
 		_E("Failed to drop from busname hash table: %s", busname);
+
 }
 
 static void resourced_dbus_get_connection_unix_process_id_callback(void *data, DBusMessage *msg, DBusError *error)
@@ -360,13 +360,10 @@ static void resourced_dbus_get_connection_unix_process_id_callback(void *data, D
 	char *busname = data;
 	pid_t pid;
 
-	if (dbus_error_is_set(error)) {
-		free(busname);
+	if (dbus_error_is_set(error))
 		return;
-	}
 
 	if (!dbus_message_get_args(msg, &err, DBUS_TYPE_UINT32, &pid, DBUS_TYPE_INVALID)) {
-		free(busname);
 		_E("Failed to get arguments from message: %s", err.message);
 		return;
 	}
@@ -374,7 +371,7 @@ static void resourced_dbus_get_connection_unix_process_id_callback(void *data, D
 	resourced_dbus_system_hash_insert_busname(busname, pid);
 }
 
-static void resourced_dbus_get_connection_unix_process_id(char *busname)
+static bool resourced_dbus_get_connection_unix_process_id(char *busname)
 {
 	E_DBus_Connection *conn = NULL;
 	DBusMessage *msg = NULL;
@@ -388,13 +385,13 @@ static void resourced_dbus_get_connection_unix_process_id(char *busname)
 					   "GetConnectionUnixProcessID");
 	if (!msg) {
 		_E("Failed to get new message");
-		return;
+		return FALSE;
 	}
 
 	if (!dbus_message_append_args(msg, DBUS_TYPE_STRING, &busname, DBUS_TYPE_INVALID)) {
 		_E("Failed to append args");
 		dbus_message_unref(msg);
-		return;
+		return FALSE;
 	}
 
 	pending = e_dbus_message_send(conn,
@@ -405,12 +402,40 @@ static void resourced_dbus_get_connection_unix_process_id(char *busname)
 	if (!pending) {
 		_E("Failed to send message");
 		dbus_message_unref(msg);
-		return;
+		return FALSE;
 	}
 
 	dbus_message_unref(msg);
 
-	return;
+	return TRUE;
+}
+
+static bool resourced_dbus_get_busname_pid(char *busname, pid_t *pid)
+{
+	DBusError err = DBUS_ERROR_INIT;
+	DBusMessage *reply = NULL;
+	pid_t p;
+
+	reply = dbus_method_sync(DBUS_SERVICE_DBUS,
+				 DBUS_PATH_DBUS,
+				 DBUS_INTERFACE_DBUS,
+				 "GetConnectionUnixProcessID",
+				 "s", &busname);
+
+	if (!reply) {
+		_E("Failed to sync call 'GetConnectionUnixProcessID' of '%s'", busname);
+		return FALSE;
+	}
+
+	if (!dbus_message_get_args(reply, &err, DBUS_TYPE_UINT32, &p, DBUS_TYPE_INVALID)) {
+		_E("Failed to get arguments from reply: %s", err.message);
+		dbus_error_free(&err);
+		return FALSE;
+	}
+
+	*pid = p;
+
+	return TRUE;
 }
 
 static void resourced_dbus_get_list_names_callback(void *data, DBusMessage *msg, DBusError *error)
@@ -431,7 +456,8 @@ static void resourced_dbus_get_list_names_callback(void *data, DBusMessage *msg,
 	dbus_message_iter_recurse(&iter, &sub);
 	do {
 		dbus_message_iter_get_basic(&sub, &busname);
-		resourced_dbus_get_connection_unix_process_id(busname);
+		if (!resourced_dbus_get_connection_unix_process_id(busname))
+			_E("Failed to get connection unix process id of '%s'", busname);
 	} while(dbus_message_iter_next(&sub));
 }
 
@@ -523,18 +549,27 @@ static bool resourced_dbus_become_monitor(DBusConnection *connection,
 	return (reply != NULL);
 }
 
+static DBusHandlerResult monitor_filter_func(DBusConnection	*connection,
+					     DBusMessage	*message,
+					     void		*user_data)
+{
+
+	return DBUS_HANDLER_RESULT_HANDLED;
+}
+
 E_DBus_Connection *resourced_dbus_monitor_new(DBusBusType type,
 					      DBusHandleMessageFunction filter_func,
-					      const char * const *filters)
+					      const char **filters)
 {
 	E_DBus_Connection *edbus_conn = NULL;
 	DBusConnection *conn = NULL;
 	DBusError error = DBUS_ERROR_INIT;
 
-	conn = dbus_bus_get_private(type, &error);
+	conn = dbus_bus_get(type, &error);
 	if (!conn) {
 		_E("Failed to open connecion: %s", error.message);
-		goto on_error;
+		dbus_error_free(&error);
+		return NULL;
 	}
 
 	if (!dbus_connection_add_filter(conn,
@@ -542,32 +577,21 @@ E_DBus_Connection *resourced_dbus_monitor_new(DBusBusType type,
 					NULL,
 					NULL)) {
 		_E("Failed to add filter function on connection");
-		goto on_error;
+		return NULL;
 	}
 
-	if (!resourced_dbus_become_monitor(conn, filters)) {
+	if (!resourced_dbus_become_monitor(conn, (const char * const *)filters)) {
 		_E("Failed to become a monitor connection");
-		goto on_error;
+		return NULL;
 	}
 
 	edbus_conn = e_dbus_connection_setup(conn);
 	if (!edbus_conn) {
 		_E("Failed to setup edbus connection");
-		goto on_error;
+		return NULL;
 	}
 
 	return edbus_conn;
-
-on_error:
-	if (dbus_error_is_set(&error))
-	    dbus_error_free(&error);
-
-	if (conn) {
-		dbus_connection_close(conn);
-		dbus_connection_unref(conn);
-	}
-
-	return NULL;
 }
 
 static void resourced_dbus_name_owner_changed_callback(void *data, DBusMessage *msg)
@@ -606,8 +630,15 @@ static void resourced_dbus_name_owner_changed_callback(void *data, DBusMessage *
 
 	if (is_empty(from) && !is_empty(to)) {
 		/* New BusName */
+		pid_t pid;
 
-		resourced_dbus_get_connection_unix_process_id(busname);
+		if (!resourced_dbus_get_busname_pid(busname, &pid)) {
+			_E("Failed to get connection unix process id of %s", busname);
+			return;
+		}
+
+		resourced_dbus_system_hash_insert_busname(strndup(busname, strlen(busname)+1), pid);
+
 		return;
 	} else if (!is_empty(from) && is_empty(to)) {
 		/* Drop BusName */
@@ -621,6 +652,11 @@ static void resourced_dbus_name_owner_changed_callback(void *data, DBusMessage *
 
 static int resourced_dbus_init(void *data)
 {
+	const char *filters[] = {
+		"eavesdrop=true,type='signal'",
+		NULL,
+	};
+
 	resourced_ret_c ret;
 
 	dbus_system_busname_hash = g_hash_table_new_full(g_str_hash, g_str_equal, free, NULL);
@@ -648,11 +684,16 @@ static int resourced_dbus_init(void *data)
 	ret_value_msg_if(ret != RESOURCED_ERROR_NONE, ret,
 			 "DBus method registration for %s is failed", RESOURCED_PATH_DBUS);
 
+	edbus_monitor_conn = resourced_dbus_monitor_new(DBUS_BUS_SYSTEM, monitor_filter_func, filters);
+
 	return RESOURCED_ERROR_NONE;
 }
 
 static int resourced_dbus_finalize(void *data)
 {
+	if (edbus_monitor_conn)
+		e_dbus_connection_close(edbus_monitor_conn);
+
 	ghash_free(dbus_system_busname_hash);
 	ghash_free(dbus_system_pid_hash);
 

@@ -26,21 +26,43 @@
 #ifndef __LOWMEM_HANDLER_H__
 #define __LOWMEM_HANDLER_H__
 
-#include <memory-common.h>
-
 void lowmem_dbus_init(void);
 int lowmem_memory_oom_killer(int flags);
-int lowmem_proactive_oom_killer(int flags, char *appid);
+unsigned int get_available(void);
 void lowmem_change_memory_state(int state, int force);
 void lowmem_memcg_set_threshold(int idx, int level, int value);
 void lowmem_memcg_set_leave_threshold(int idx, int value);
 unsigned long lowmem_get_ktotalram(void);
-void lowmem_trigger_swap(pid_t pid, int memcg_idx);
 
-/*
- * Return memcg pointer to selected cgroup.
- */
-int lowmem_get_memcg(enum memcg_type type, struct memcg **memcg_ptr);
+#ifdef VMPRESURE_LOWMEM
+int lowmem_proactive_oom_killer(int flags, char *appid);
+#else
+void lowmem_dynamic_process_killer(int type);
+
+enum {
+	DYNAMIC_KILL_LARGEHEAP,
+	DYNAMIC_KILL_LUNCH,
+	DYNAMIC_KILL_MAX,
+};
+#endif /* VMPRESURE_LOWMEM */
+
+enum {
+	MEMCG_MEMORY,
+	MEMCG_FOREGROUND,
+	MEMCG_SERVICE,
+	MEMCG_FAVORITE,
+	MEMCG_BACKGROUND,
+	MEMCG_SWAP,
+	MEMCG_MAX,
+};
+
+enum {
+	LOWMEM_NORMAL,
+	LOWMEM_SWAP,
+	LOWMEM_LOW,
+	LOWMEM_MEDIUM,
+	LOWMEM_MAX_LEVEL,
+};
 
 enum oom_killer_cb_flags {
 	OOM_NONE 		= 0x00000000,	/* for main oom killer thread */

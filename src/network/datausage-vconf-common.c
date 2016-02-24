@@ -45,16 +45,6 @@ resourced_ret_c restriction_check_limit_status(int *retval)
 	return RESOURCED_ERROR_NONE;
 }
 
-resourced_ret_c restriction_read_quota(int *quota)
-{
-	if (vconf_get_int(VCONFKEY_SETAPPL_DATA_LIMIT_INT, quota)) {
-		_E("vconf_get_int FAIL\n");
-		return RESOURCED_ERROR_FAIL;
-	};
-
-	return RESOURCED_ERROR_NONE;
-}
-
 void restriction_set_status(int value)
 {
 	int limit = RESTRICTION_STATE_INIT;

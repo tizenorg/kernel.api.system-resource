@@ -25,6 +25,7 @@
  *
  */
 
+#define _GNU_SOURCE
 #include <Ecore.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -40,7 +41,7 @@
 #include "proc-common.h"
 #include "heart.h"
 #include "logging.h"
-#include "heart-common.h"
+#include "logging-common.h"
 #include "edbus-handler.h"
 #include "helper.h"
 #include "decision.h"

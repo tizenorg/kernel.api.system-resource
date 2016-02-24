@@ -35,7 +35,6 @@
 #include "counter.h"
 #include "nfacct-rule.h"
 #include "iface.h"
-#include "proc-common.h"
 
 enum netstat_control_type {
 	NET_CTRL_TYPE_UNKNOWN,
@@ -96,10 +95,5 @@ void background_apps(struct counter_arg *carg);
  */
 void load_network_opts(struct net_counter_opts *opts);
 
-/**
- * @desc  move all pids of main pid to the
- * to appropriate apps cgroups
- */
-void move_pids_tree_to_cgroup(struct proc_app_info *pai, const char *pkg_name);
 
 #endif /* __RESOURCED_NETSTAT_COMMON_H__ */

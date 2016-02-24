@@ -146,14 +146,14 @@ static resourced_ret_c obtain_and_keep_quotas(sqlite3_stmt *query)
 				goto free_value;
 			}
 
-			key->app_id = strndup((char *)sqlite3_column_text(query, 0),
-						strlen((char *)sqlite3_column_text(query, 0)));
+			key->app_id = strdup((char *)sqlite3_column_text(
+				query, 0));
 			key->iftype = sqlite3_column_int(
 				query, 11);
 			key->roaming = sqlite3_column_int(
 				query, 12);
-			key->imsi_hash = strndup((char *)sqlite3_column_text(query, 15),
-						strlen((char *)sqlite3_column_text(query, 15)));
+			key->imsi_hash = strdup((char *)sqlite3_column_text(
+				query, 15));
 			key->ground = sqlite3_column_int(query, 16);
 
 			value->send_quota = sqlite3_column_int64(
@@ -501,8 +501,6 @@ static void set_effective_quota(const char *app_id,
 	data_usage_selection_rule rule = {0,};
 	struct data_usage_context out_context = {0,};
 	const time_t cur_time = time(0);
-	char buf[30];
-
 	app_id = !strcmp(app_id, RESOURCED_ALL_APP) ? 0: app_id;
 
 	if (cur_time < start_time) {
@@ -527,11 +525,10 @@ static void set_effective_quota(const char *app_id,
 		return;
 	}
 
-	if (ctime_r(&rule.from, buf))
-		_SD("Get counted traffic for appid:%s, per %s "\
-				"time interval %d, incoming:%" PRId64 ", outgoing:%" PRId64 "", app_id,
-				buf, time_period, out_context.rcv_used_quota,
-				out_context.sent_used_quota);
+	_SD("Get counted traffic for appid:%s, per %s "\
+	    "time interval %d, incoming:%" PRId64 ", outgoing:%" PRId64 "", app_id,
+	    ctime(&rule.from), time_period, out_context.rcv_used_quota,
+	    out_context.sent_used_quota);
 
 	app_quota->sent_used_quota = out_context.sent_used_quota;
 	app_quota->rcv_used_quota = out_context.rcv_used_quota;
@@ -611,13 +608,13 @@ void update_quota_state(const char *app_id, const int quota_id,
 		memset(tree_value, 0, sizeof(struct quota));
 		/* app_id was allocated by dbus, and it will be freed
 		 * when dbus request is gone */
-		insert_key->app_id = strndup(app_id, strlen(app_id));
+		insert_key->app_id = strdup(app_id);
 		if (!insert_key->app_id) {
 			_E("not enough memory");
 			goto release_quota_value;
 		}
 
-		insert_key->imsi_hash = strndup(ser_quota->imsi_hash, strlen(ser_quota->imsi_hash));
+		insert_key->imsi_hash = strdup(ser_quota->imsi_hash);
 		if (!insert_key->imsi_hash) {
 			_E("not enough memory");
 			goto release_app_id;
@@ -673,7 +670,7 @@ void remove_quota_from_counting(const char *app_id, const resourced_iface_type i
 	key.app_id = app_id;
 	key.iftype = iftype;
 	key.roaming = roaming;
-	key.imsi_hash = strndup(imsi_hash, strlen(imsi_hash));
+	key.imsi_hash = strdup(imsi_hash);
 
 	g_tree_remove(quotas, (gconstpointer*)(&key));
 }
@@ -894,7 +891,6 @@ static gboolean check_and_apply_node(gpointer key,
 		rst.iftype = key_quota->iftype;
 		rst.ifname = get_iftype_name(rst.iftype);
 		rst.roaming = key_quota->roaming;
-		rst.imsi = key_quota->imsi_hash;
 
 		/*
 		 * client request quota for background application or
@@ -909,7 +905,7 @@ static gboolean check_and_apply_node(gpointer key,
 		 * just do not skip kernel op */
 		if (proc_keep_restriction(key_quota->app_id,
 				          app_quota->quota_id, &rst,
-					  RST_SET, false, RESOURCED_RESTRICTION_ACTIVATED) != RESOURCED_ERROR_NONE) {
+					  RST_SET, false) != RESOURCED_ERROR_NONE) {
 			_E("Failed to keep restriction!");
 			return FALSE;
 		}
@@ -954,18 +950,6 @@ static inline bool check_imsi_hash(const char *hash_a, const char *hash_b)
 	return hash_a == hash_b; /* both null */
 }
 
-static bool check_ground_state(const struct quota_key *qkey,
-		struct application_stat *app_stat)
-{
-	/*
-	 * unspecified quota, means BACKGROUND and FOREGROUND
-	 * traffic should be taken into account
-	 * */
-	if (qkey->ground == RESOURCED_STATE_UNKNOWN)
-		return true;
-	return CHECK_BIT(qkey->ground, app_stat->ground);
-}
-
 static gboolean update_pseudo_app_entry(gpointer key,
 	gpointer value, gpointer user_data)
 {
@@ -993,7 +977,7 @@ static gboolean update_pseudo_app_entry(gpointer key,
 	     (check_imsi_hash(qkey->imsi_hash, arg->imsi_hash)) &&
 	     (qkey->roaming == RESOURCED_ROAMING_UNKNOWN ||
 	      qkey->roaming == arg->app_stat->is_roaming) &&
-	      check_ground_state(qkey, arg->app_stat)) ||
+	      CHECK_BIT(qkey->ground, arg->app_stat->ground)) ||
 	    !strcmp(qkey->app_id, TETHERING_APP_NAME))
 	{
 		/* update it */
@@ -1064,9 +1048,7 @@ static gboolean update_each_quota(gpointer key, gpointer value,
 	qkey.app_id = app_stat->application_id;
 	qkey.iftype = app_key->iftype;
 	qkey.roaming = app_stat->is_roaming;
-	/* TODO ground is not handled for quota per application,
-	 * due GUI is not set quota per application, yet,
-	 * no such requirements */
+	/* TODO following code could be a function */
 	qkey.imsi_hash = app_key->iftype == RESOURCED_IFACE_DATACALL ? get_imsi_hash(app_key->imsi): "";
 	update_traffic_quota(&qkey, &app_stat->delta_snd,
 			     &app_stat->delta_rcv);

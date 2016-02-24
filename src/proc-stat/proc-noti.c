@@ -34,7 +34,6 @@
 #include <sys/xattr.h>
 
 #include <Ecore.h>
-#include <systemd/sd-daemon.h>
 
 #include "macro.h"
 #include "util.h"
@@ -86,8 +85,10 @@ static inline char *recv_str(int fd)
 			break;
 	}
 
-	if (len <= 0)
+	if (len <= 0) {
+		_D("str is null");
 		return NULL;
+	}
 
 	if (len >= INT_MAX) {
 		_E("size is over INT_MAX");
@@ -138,10 +139,8 @@ static int read_message(int fd, struct resourced_noti *msg)
 	msg->argc = recv_int(fd);
 	ret_value_if(msg->argc <= 0, errno);
 
-	for (i = 0; i < msg->argc; ++i) {
+	for (i = 0; i < msg->argc; ++i)
 		msg->argv[i] = recv_str(fd);
-		ret_value_if(msg->argv[i] <= 0, errno);
-	}
 
 	return 0;
 }
@@ -191,6 +190,7 @@ static void safe_write_int(int fd, int type, int *value)
 static int write_response(int *retval, int fd, char *buf, int len)
 {
 	int ret;
+
 	ret = send(fd, retval, sizeof(int), 0);
 	if (ret < 0)
 		_E("Failed to send");
@@ -212,7 +212,6 @@ static Eina_Bool proc_noti_cb(void *data, Ecore_Fd_Handler *fd_handler)
 	_cleanup_free_ char *send_buffer = NULL;
 	int send_len;
 	pid_t pid;
-	struct timeval tv = { 1, 0 };	/* 1 sec */
 
 	if (!ecore_main_fd_handler_active_get(fd_handler, ECORE_FD_READ)) {
 		_E("ecore_main_fd_handler_active_get error , return\n");
@@ -237,7 +236,6 @@ static Eina_Bool proc_noti_cb(void *data, Ecore_Fd_Handler *fd_handler)
 		return ECORE_CALLBACK_RENEW;
 	}
 
-	setsockopt(client_sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 	error_code = read_message(client_sockfd, msg);
 
 	if (error_code && _fatal_read_message_error(error_code)) {
@@ -261,7 +259,7 @@ static Eina_Bool proc_noti_cb(void *data, Ecore_Fd_Handler *fd_handler)
 		send_len = atoi(msg->argv[1]);
 		send_buffer = calloc(1, send_len);
 		if (!send_buffer) {
-			_E("not enough memory for calloc");
+			_E("not enough memory to calloc");
 			ret = -ENOMEM;
 			safe_write_int(client_sockfd, msg->type, &ret);
 			goto proc_noti_renew;
@@ -283,63 +281,56 @@ proc_noti_renew:
 
 static int proc_noti_socket_init(void)
 {
-	int fd, n = 0;
+	int fd;
 	struct sockaddr_un serveraddr;
 
-	n = sd_listen_fds(0);
-	if (n > 1) {
-		_E("Error: Too many file descriptors received: %d", n);
+	if (access(RESOURCED_SOCKET_PATH, F_OK) == 0)
+		unlink(RESOURCED_SOCKET_PATH);
+
+	fd = socket(AF_UNIX, SOCK_STREAM, 0);
+	if (fd < 0) {
+		_E("%s: socket create failed\n", __func__);
 		return -1;
-	} else if (n==1) {
-		fd = SD_LISTEN_FDS_START + 0;
-	} else {
-		if (access(RESOURCED_SOCKET_PATH, F_OK) == 0)
-			unlink(RESOURCED_SOCKET_PATH);
+	}
 
-		fd = socket(AF_UNIX, SOCK_STREAM, 0);
-		if (fd < 0) {
-			_E("%s: socket create failed\n", __func__);
-			return -1;
-		}
-
-		if ((fsetxattr(fd, "security.SMACK64IPOUT", "@", 2, 0)) < 0) {
-			_E("%s: Socket SMACK labeling failed\n", __func__);
-			if (errno != EOPNOTSUPP) {
-				close(fd);
-				return -1;
-			}
-		}
-
-		if ((fsetxattr(fd, "security.SMACK64IPIN", "*", 2, 0)) < 0) {
-			_E("%s: Socket SMACK labeling failed\n", __func__);
-			if (errno != EOPNOTSUPP) {
-				close(fd);
-				return -1;
-			}
-		}
-
-		bzero(&serveraddr, sizeof(struct sockaddr_un));
-		serveraddr.sun_family = AF_UNIX;
-		strncpy(serveraddr.sun_path, RESOURCED_SOCKET_PATH,
-			sizeof(serveraddr.sun_path)-1);
-		serveraddr.sun_path[sizeof(serveraddr.sun_path)-1] = 0;
-
-		if (bind(fd, (struct sockaddr *)&serveraddr, sizeof(struct sockaddr)) <
-		    0) {
-			_E("%s: socket bind failed\n", __func__);
-			close(fd);
-			return -1;
-		}
-
-		if (chmod(RESOURCED_SOCKET_PATH, (S_IRWXU | S_IRWXG | S_IRWXO)) < 0)
-			_E("failed to change the socket permission");
-
-		if (listen(fd, 5) < 0) {
-			_E("%s: socket listen failed\n", __func__);
+	if ((fsetxattr(fd, "security.SMACK64IPOUT", "@", 2, 0)) < 0) {
+		_E("%s: Socket SMACK labeling failed\n", __func__);
+		if (errno != EOPNOTSUPP) {
 			close(fd);
 			return -1;
 		}
 	}
+
+	if ((fsetxattr(fd, "security.SMACK64IPIN", "*", 2, 0)) < 0) {
+		_E("%s: Socket SMACK labeling failed\n", __func__);
+		if (errno != EOPNOTSUPP) {
+			close(fd);
+			return -1;
+		}
+	}
+
+	bzero(&serveraddr, sizeof(struct sockaddr_un));
+	serveraddr.sun_family = AF_UNIX;
+	strncpy(serveraddr.sun_path, RESOURCED_SOCKET_PATH,
+		sizeof(serveraddr.sun_path)-1);
+	serveraddr.sun_path[sizeof(serveraddr.sun_path)-1] = 0;
+
+	if (bind(fd, (struct sockaddr *)&serveraddr, sizeof(struct sockaddr)) <
+	    0) {
+		_E("%s: socket bind failed\n", __func__);
+		close(fd);
+		return -1;
+	}
+
+	if (chmod(RESOURCED_SOCKET_PATH, (S_IRWXU | S_IRWXG | S_IRWXO)) < 0)
+		_E("failed to change the socket permission");
+
+	if (listen(fd, 5) < 0) {
+		_E("%s: socket listen failed\n", __func__);
+		close(fd);
+		return -1;
+	}
+
 	_D("socket create & listen ok\n");
 
 	return fd;

@@ -1,5 +1,0 @@
-[D-BUS Service]
-Name=org.tizen.system.ResourcedTest
-Exec=/bin/false
-SystemdService=resourced-test.service
-User=root

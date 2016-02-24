@@ -25,6 +25,10 @@
  *
  */
 
+#ifndef _GNU_SOURCE
+#  define _GNU_SOURCE
+#endif
+
 #include <dirent.h>
 #include <stdbool.h>
 #include <errno.h>

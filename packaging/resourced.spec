@@ -7,8 +7,8 @@ License:    Apache-2.0
 Source0:    %{name}-%{version}.tar.gz
 Source1:    resourced.service
 Source2:    resourced-cpucgroup.service
-Source3:    resourced.socket
 
+%define powertop_state OFF
 %define cpu_module ON
 %define vip_agent_module ON
 %define timer_slack OFF
@@ -21,11 +21,17 @@ Source3:    resourced.socket
 %define network_state OFF
 %define memory_eng ON
 
-%define slp_tests OFF
-
 %if "%{?tizen_profile_name}" == "mobile"
-	%define swap_module ON
-	%define freezer_module ON
+	# %if ("%{_repository}" == "target-Z130H") || %if ("%{_repository}" == "target-Z300H")
+	# %if ("%{_repository}" == "target-Z130H")
+	%if "%{_repository}" == "target-Z130H" || "%{_repository}" == "target-TM1"
+		%define swap_module ON
+		%define memory_vmpressure ON
+	%else
+		%define swap_module OFF
+		%define memory_vmpressure OFF
+	%endif
+        %define freezer_module ON
 	%define network_state OFF
 	%define tethering_feature OFF
 	%define wearable_noti OFF
@@ -33,8 +39,9 @@ Source3:    resourced.socket
 %endif
 
 %if "%{?tizen_profile_name}" == "wearable"
-	%define freezer_module ON
+        %define freezer_module ON
 	%define swap_module ON
+	%define memory_vmpressure ON
 	%define network_state OFF
 	%define tethering_feature OFF
 	%define wearable_noti ON
@@ -44,6 +51,7 @@ Source3:    resourced.socket
 %if "%{?tizen_profile_name}" == "tv"
 	%define freezer_module OFF
 	%define swap_module OFF
+	%define memory_vmpressure ON
 	%define network_state OFF
 	%define tethering_feature OFF
 	%define wearable_noti OFF
@@ -66,8 +74,8 @@ BuildRequires:  pkgconfig(vconf)
 BuildRequires:  pkgconfig(vconf-internal-keys)
 BuildRequires:  pkgconfig(ecore)
 BuildRequires:  pkgconfig(ecore-file)
-BuildRequires:  pkgconfig(edbus)
 BuildRequires:  pkgconfig(eina)
+BuildRequires:  pkgconfig(edbus)
 BuildRequires:  pkgconfig(libsystemd-daemon)
 BuildRequires:  pkgconfig(openssl)
 BuildRequires:  pkgconfig(leveldb)
@@ -108,16 +116,6 @@ Requires:   libresourced  = %{version}-%{release}
 %description -n libresourced-devel
 Library (development) for resourced (Resource Management Daemon)
 
-%if %{?slp_tests} == ON
-%package -n resourced-test
-Summary: Resource test tools
-Group:   System/Libraries
-Requires:   %{name} = %{version}-%{release}
-
-%description -n resourced-test
-This package include set of test programs
-%endif
-
 %prep
 %setup -q
 
@@ -131,22 +129,19 @@ echo "\
 #define MAJOR_VERSION ${MAJORVER}
 #define PATCH_VERSION ${PATCHVER}" > src/common/version.h
 
+%if 0%{?tizen_build_binary_release_type_eng}
+	CFLAGS+=" -DTIZEN_ENGINEER_MODE"
+%endif
+
 %if 0%{?sec_build_binary_debug_enable}
 export CFLAGS="$CFLAGS -DTIZEN_DEBUG_ENABLE"
 export CXXFLAGS="$CXXFLAGS -DTIZEN_DEBUG_ENABLE"
 export FFLAGS="$FFLAGS -DTIZEN_DEBUG_ENABLE"
 %endif
 
-%ifarch %{arm}
-%define ARCH arm
-%else
-%define ARCH i586
-%endif
-
 %cmake . -DCMAKE_INSTALL_PREFIX=%{_prefix} \
 	 -DFULLVER=%{version} \
 	 -DMAJORVER=${MAJORVER} \
-	 -DARCH=%{ARCH} \
 	 -DCMAKE_BUILD_TYPE=Release \
 	 -DEXCLUDE_LIST_FILE_NAME=%{exclude_list_file_name} \
 	 -DEXCLUDE_LIST_FULL_PATH=%{exclude_list_full_path} \
@@ -154,6 +149,7 @@ export FFLAGS="$FFLAGS -DTIZEN_DEBUG_ENABLE"
 	 -DEXCLUDE_LIST_OPT_FULL_PATH=%{exclude_list_opt_full_path} \
 	 -DNETWORK_MODULE=%{network_state} \
 	 -DSWAP_MODULE=%{swap_module} \
+	 -DPOWERTOP_MODULE=%{powertop_state} \
 	 -DFREEZER_MODULE=%{freezer_module} \
 	 -DCPU_MODULE=%{cpu_module} \
 	 -DMEMORY_ENG=%{memory_eng} \
@@ -163,9 +159,9 @@ export FFLAGS="$FFLAGS -DTIZEN_DEBUG_ENABLE"
 	 -DHEART_MODULE=%{heart_module} \
 	 -DDATAUSAGE_TYPE=NFACCT \
 	 -DMEMORY_MODULE=%{memory_module} \
+	 -DMEMORY_VMPRESSURE=%{memory_vmpressure} \
 	 -DWEARABLE_NOTI=%{wearable_noti} \
-	 -DBLOCK_MODULE=%{block_module} \
-	 -DSLP_TESTS=%{slp_tests}
+	 -DBLOCK_MODULE=%{block_module}
 
 make %{?jobs:-j%jobs}
 
@@ -202,20 +198,20 @@ install -m 0644 %SOURCE6 %{buildroot}%{_libdir}/systemd/system/resourced-cpucgro
 ln -s ../resourced-cpucgroup.service %{buildroot}%{_libdir}/systemd/system/graphical.target.wants/resourced-cpucgroup.service
 %endif
 
-mkdir -p %{buildroot}/usr/lib/systemd/system/sockets.target.wants
-install -m 0644 %SOURCE3 %{buildroot}/usr/lib/systemd/system/resourced.socket
-ln -s ../resourced.socket %{buildroot}%{_libdir}/systemd/system/sockets.target.wants/
+#powertop-wrapper part
+%if %{?powertop_state} == ON
+mkdir -p %{buildroot}/usr/share/powertop-wrapper/
+cp -p %_builddir/%name-%version/src/powertop-wrapper/header.html %{buildroot}/usr/share/powertop-wrapper
+%endif
 
-%pre
+%pre resourced
 if [ "$1" = "2" ]; then # upgrade begins
 	systemctl stop resourced.service
 fi
 
-%post
-/sbin/ldconfig
+%post -p /sbin/ldconfig
 
-mkdir -p %{_sysconfdir}/systemd/default-extra-dependencies/ignore-units.d/
-ln -sf %{_libdir}/systemd/system/resourced.service %{_sysconfdir}/systemd/default-extra-dependencies/ignore-units.d/
+%post resourced
 
 init_vconf()
 {
@@ -241,7 +237,7 @@ fi
 
 %postun -p /sbin/ldconfig
 
-%files
+%files -n resourced
 /usr/share/license/%{name}
 /etc/smack/accesses2.d/resourced.rule
 %attr(-,root, root) %{_bindir}/resourced
@@ -260,8 +256,6 @@ fi
 %config %{_sysconfdir}/dbus-1/system.d/resourced.conf
 %{_libdir}/systemd/system/resourced.service
 %{_libdir}/systemd/system/multi-user.target.wants/resourced.service
-%{_libdir}/systemd/system/resourced.socket
-%{_libdir}/systemd/system/sockets.target.wants/resourced.socket
 %config /etc/resourced/memory.conf
 %config /etc/resourced/proc.conf
 %if %{?cpu_module} == ON
@@ -285,10 +279,12 @@ fi
 %config /etc/resourced/block.conf
 %endif
 %if %{?freezer_module} == ON
-%{_libdir}/libsystem-freezer.so*
 %config /etc/resourced/freezer.conf
 %endif
 %{exclude_list_full_path}
+%if %{?powertop_state} == ON
+/usr/share/powertop-wrapper/header.html
+%endif
 %if %{?heart_module} == ON
 %config /etc/resourced/heart.conf
 %attr(700, root, root) /opt/etc/dump.d/module.d/dump_heart_data.sh
@@ -296,17 +292,9 @@ fi
 %attr(700, app, app) %{logging_storage_db_full_path}-shm
 %attr(700, app, app) %{logging_storage_db_full_path}-wal
 %endif
-%if %{?slp_tests} == ON
-/usr/bin/resourced-test
-/usr/lib/systemd/system/resourced-test.service
-/usr/share/dbus-1/system-services/org.tizen.system.resourced-test.service
-%endif
+
 #memps
 %attr(-,root, root) %{_bindir}/memps
-#mem-stress
-%attr(-,root, root) %{_bindir}/mem-stress
-%{_libdir}/systemd/system/mem-stress.service
-%{_libdir}/systemd/system/graphical.target.wants/mem-stress.service
 
 %files -n libresourced
 %manifest libresourced.manifest
@@ -315,7 +303,11 @@ fi
 #proc-stat part
 %{_libdir}/libproc-stat.so.*
 #network part
-%{_libdir}/libresourced.so*
+%{_libdir}/libresourced.so.*
+#powertop-wrapper part
+%if %{?powertop_state} == ON
+%{_libdir}/libpowertop-wrapper.so.*
+%endif
 
 %files -n libresourced-devel
 %defattr(-,root,root,-)
@@ -328,9 +320,9 @@ fi
 %if %{?network_state} == ON
 %{_includedir}/system/data_usage.h
 %endif
-
-%if %{?slp_tests} == ON
-%files -n resourced-test
-%defattr(-,root,root,-)
-%{_libdir}/resourced/test/test-file-helper
+%{_libdir}/libresourced.so
+#powertop-wrapper part
+%if %{?powertop_state} == ON
+%{_includedir}/system/powertop-dapi.h
+%{_libdir}/libpowertop-wrapper.so
 %endif

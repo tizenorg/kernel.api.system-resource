@@ -416,7 +416,8 @@ static void wait_for_rule_cmd(pid_t pid)
 	}
 	ret_pid = waitpid(pid, &status, 0);
 	if (ret_pid < 0) {
-		_D("can't wait for a pid %d %d %s", pid, status, strerror_r(errno, buf, sizeof(buf)));
+		strerror_r(errno, buf, sizeof(buf));
+		_D("can't wait for a pid %d %d %s", pid, status, buf);
 	}
 }
 
@@ -481,8 +482,9 @@ resourced_ret_c exec_iptables_cmd(const char *cmd_buf, pid_t *cmd_pid)
 
 		ret = execv(cmd, args);
 		if (ret) {
+			strerror_r(errno, buf, sizeof(buf));
 			_E("Can't execute %s: %s",
-				cmd_buf, strerror_r(errno, buf, sizeof(buf)));
+				cmd_buf, buf);
 		}
 		exit(ret);
 	}

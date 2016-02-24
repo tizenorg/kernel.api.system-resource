@@ -17,14 +17,15 @@
  */
 
 /*
- * @file heart-storage.c
+ * @file logging-storage.c
  *
- * @desc heart storage module
+ * @desc start storage logging system for resourced
  *
  * Copyright (c) 2015 Samsung Electronics Co., Ltd. All rights reserved.
  *
  */
 
+#define _GNU_SOURCE
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -40,18 +41,18 @@
 #include "notifier.h"
 #include "heart.h"
 #include "logging.h"
-#include "heart-common.h"
+#include "logging-common.h"
 #include "edbus-handler.h"
 #include "helper.h"
 
 #include <sqlite3.h>
 
-#define HEART_STORAGE_DB			"/opt/usr/dbspace/.resourced-logging-storage.db"
+#define LOGGING_DB			"/opt/usr/dbspace/.resourced-logging-storage.db"
 #define STORAGE_NAME		"storage"
 
-static bool heart_storage_initailized = false;
-static pthread_mutex_t heart_storage_verifying_mutex = PTHREAD_MUTEX_INITIALIZER;
-static pthread_t heart_storage_verifying_thread = 0;
+static bool logging_storage_initailized = false;
+static pthread_mutex_t logging_storage_verifying_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_t logging_storage_verifying_thread = 0;
 static GQueue *queue = NULL;
 
 static DBusMessage *edbus_insert_log(E_DBus_Object *obj, DBusMessage *msg)
@@ -77,7 +78,7 @@ static DBusMessage *edbus_insert_log(E_DBus_Object *obj, DBusMessage *msg)
 	return reply;
 }
 
-void heart_storage_delete_cb(struct logging_table_form *table, void *user_data)
+void logging_storage_delete_cb(struct logging_table_form *table)
 {
 	int ret;
 
@@ -95,14 +96,14 @@ void heart_storage_delete_cb(struct logging_table_form *table, void *user_data)
 		_SE("Delete request failed: %s", table->data);
 }
 
-void *heart_storage_verifying_thread_main(void *arg)
+void *logging_storage_verifying_thread_main(void *arg)
 {
 	int ret;
 	char *pkgid;
 
 	_D("Verifying thread is created!");
 	do {
-		ret = pthread_mutex_lock(&heart_storage_verifying_mutex);
+		ret = pthread_mutex_lock(&logging_storage_verifying_mutex);
 		if (ret) {
 			_E("logging storage verifying thread::pthread_mutex_lock() failed, %d", ret);
 			break;
@@ -112,21 +113,21 @@ void *heart_storage_verifying_thread_main(void *arg)
 		if (!pkgid)
 			break;
 
-		pthread_mutex_unlock(&heart_storage_verifying_mutex);
+		pthread_mutex_unlock(&logging_storage_verifying_mutex);
 
 		_SD("Verify '%s'", pkgid);
-		ret = logging_read_foreach(STORAGE_NAME, NULL, pkgid, 0, 0, heart_storage_delete_cb, NULL);
+		ret = logging_read_foreach(STORAGE_NAME, NULL, pkgid, 0, 0, logging_storage_delete_cb);
 		if (ret != RESOURCED_ERROR_NONE)
 			_E("Failed to read logs! : %d", ret);
 		free(pkgid);
 	} while (1);
 
-	heart_storage_verifying_thread = 0;
-	pthread_mutex_unlock(&heart_storage_verifying_mutex);
+	logging_storage_verifying_thread = 0;
+	pthread_mutex_unlock(&logging_storage_verifying_mutex);
 	pthread_exit((void *)0);
 }
 
-void heart_storage_verifying_thread_create(const char *data)
+void logging_storage_verifying_thread_create(const char *data)
 {
 	char *pkgid = strndup(data, strlen(data)+1);
 	if (!pkgid) {
@@ -134,7 +135,7 @@ void heart_storage_verifying_thread_create(const char *data)
 		return;
 	}
 
-	int ret = pthread_mutex_lock(&heart_storage_verifying_mutex);
+	int ret = pthread_mutex_lock(&logging_storage_verifying_mutex);
 	if (ret) {
 		_E("logging storage verifying thread::pthread_mutex_lock() failed, %d", ret);
 		free(pkgid);
@@ -144,31 +145,31 @@ void heart_storage_verifying_thread_create(const char *data)
 	/* Add pkgid to queue */
 	g_queue_push_tail(queue, pkgid);
 
-	if (heart_storage_verifying_thread == 0) {
+	if (logging_storage_verifying_thread == 0) {
 		pthread_attr_t attr;
 		ret = pthread_attr_init(&attr);
 		if (ret < 0) {
 			_E("Failed to initialize pthread attributes, %d", ret);
-			pthread_mutex_unlock(&heart_storage_verifying_mutex);
+			pthread_mutex_unlock(&logging_storage_verifying_mutex);
 			return;
 		}
 
 		ret = pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
 		if (ret < 0) {
 			_E("Failed to set detached state, %d", ret);
-			pthread_mutex_unlock(&heart_storage_verifying_mutex);
+			pthread_mutex_unlock(&logging_storage_verifying_mutex);
 			return;
 		}
 
-		ret = pthread_create(&heart_storage_verifying_thread, &attr, heart_storage_verifying_thread_main, NULL);
+		ret = pthread_create(&logging_storage_verifying_thread, &attr, logging_storage_verifying_thread_main, NULL);
 		if (ret < 0) {
-			_E("pthread creation for heart_storage_verifying_thread_main failed, %d", ret);
-			pthread_mutex_unlock(&heart_storage_verifying_mutex);
+			_E("pthread creation for logging_storage_verifying_thread_main failed, %d", ret);
+			pthread_mutex_unlock(&logging_storage_verifying_mutex);
 			return;
 		}
 	}
 
-	pthread_mutex_unlock(&heart_storage_verifying_mutex);
+	pthread_mutex_unlock(&logging_storage_verifying_mutex);
 }
 
 static DBusMessage *edbus_verify_log(E_DBus_Object *obj, DBusMessage *msg)
@@ -185,13 +186,31 @@ static DBusMessage *edbus_verify_log(E_DBus_Object *obj, DBusMessage *msg)
 	/* flush module cache */
 	logging_save_to_storage(true);
 
-	heart_storage_verifying_thread_create(pkgid);
+	logging_storage_verifying_thread_create(pkgid);
+	return reply;
+}
+
+static DBusMessage *edbus_flush_log(E_DBus_Object *obj, DBusMessage *msg)
+{
+	int ret;
+	DBusMessage *reply = NULL;
+
+	ret = dbus_message_get_args(msg, NULL, DBUS_TYPE_INVALID);
+	reply = dbus_message_new_method_return(msg);
+	if (!ret) {
+		_E("Wrong message arguments!");
+		return reply;
+	}
+	/* flush module cache */
+	logging_save_to_storage(true);
+
 	return reply;
 }
 
 static const struct edbus_method edbus_methods[] = {
 	{ "Insert", "ss", NULL, edbus_insert_log },
-	{ "Verify", "s", NULL, edbus_verify_log }
+	{ "Verify", "s", NULL, edbus_verify_log },
+	{ "Flush", NULL, NULL, edbus_flush_log }
 };
 
 static bool is_storage_logging(void)
@@ -200,11 +219,11 @@ static bool is_storage_logging(void)
 
 	block = find_module("block");
 	if (block)
-		heart_storage_initailized = true;
-	return heart_storage_initailized;
+		logging_storage_initailized = true;
+	return logging_storage_initailized;
 }
 
-static int heart_storage_write(void *data)
+static int logging_storage_write(void *data)
 {
 	int ret;
 	struct logging_data *ld = (struct logging_data *)data;
@@ -213,14 +232,14 @@ static int heart_storage_write(void *data)
 	return ret;
 }
 
-static int heart_storage_init(void *data)
+static int logging_storage_init(void *data)
 {
 	int ret;
 
 	if (!is_storage_logging())
 		return RESOURCED_ERROR_UNINITIALIZED;
 
-	ret = pthread_mutex_init(&heart_storage_verifying_mutex, NULL);
+	ret = pthread_mutex_init(&logging_storage_verifying_mutex, NULL);
 	if (ret < 0) {
 		_E("mutex_init failed %d", ret);
 		return RESOURCED_ERROR_FAIL;
@@ -233,7 +252,7 @@ static int heart_storage_init(void *data)
 	}
 	g_queue_init(queue);
 
-	ret = logging_module_init_with_db_path(STORAGE_NAME, FOUR_MONTH, FIVE_MINUTE, NULL, 0, HEART_STORAGE_DB);
+	ret = logging_module_init_with_db_path(STORAGE_NAME, FOUR_MONTH, FIVE_MINUTE, NULL, 0, LOGGING_DB);
 	if (ret != RESOURCED_ERROR_NONE) {
 		_E("logging module init failed");
 		return RESOURCED_ERROR_FAIL;
@@ -244,24 +263,24 @@ static int heart_storage_init(void *data)
 		_E("DBus method registration for %s is failed", RESOURCED_PATH_LOGGING);
 	}
 
-	register_notifier(RESOURCED_NOTIFIER_LOGGING_WRITE, heart_storage_write);
+	register_notifier(RESOURCED_NOTIFIER_LOGGING_WRITE, logging_storage_write);
 	return RESOURCED_ERROR_NONE;
 }
 
-static int heart_storage_exit(void *data)
+static int logging_storage_exit(void *data)
 {
-	if (!heart_storage_initailized)
+	if (!logging_storage_initailized)
 		return RESOURCED_ERROR_NONE;
 
-	_D("heart_storage exit");
-	unregister_notifier(RESOURCED_NOTIFIER_LOGGING_WRITE, heart_storage_write);
+	_D("logging_storage exit");
+	unregister_notifier(RESOURCED_NOTIFIER_LOGGING_WRITE, logging_storage_write);
 	logging_module_exit();
 	return RESOURCED_ERROR_NONE;
 }
 
 static const struct heart_module_ops heart_storage_ops = {
 	.name		= "STORAGE",
-	.init		= heart_storage_init,
-	.exit		= heart_storage_exit,
+	.init		= logging_storage_init,
+	.exit		= logging_storage_exit,
 };
 HEART_MODULE_REGISTER(&heart_storage_ops)

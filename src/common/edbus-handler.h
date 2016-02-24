@@ -92,9 +92,6 @@ struct edbus_signal {
 #define RESOURCED_PATH_DBUS			OBJECT_PATH"/DBus"
 #define RESOURCED_INTERFACE_DBUS	INTERFACE_NAME".dbus"
 
-#define RESOURCED_PATH_SLUGGISH		OBJECT_PATH"/Sluggish"
-#define RESOURCED_INTERFACE_SLUGGISH	INTERFACE_NAME".sluggish"
-
 #define SIGNAL_PROC_WATCHDOG_RESULT	"WatchdogResult"
 #define SIGNAL_PROC_ACTIVE		"Active"
 #define SIGNAL_PROC_EXCLUDE		"ProcExclude"
@@ -103,16 +100,7 @@ struct edbus_signal {
 #define SIGNAL_PROC_WATCHDOG	"ProcWatchdog"
 #define SIGNAL_PROC_SYSTEMSERVICE	"SystemService"
 
-#define SIGNAL_SLUGGISH_DETECTED	"SluggishDetected"
-
-#define SIGNAL_OOM_SET_THRESHOLD	"SetThreshold"
-#define SIGNAL_OOM_SET_LEAVE_THRESHOLD	"SetLeaveThreshold"
-#define SIGNAL_OOM_TRIGGER		"Trigger"
-#define SIGNAL_OOM_SET_PERCEPTIBLE	"SetPerceptible"
-#define SIGNAL_OOM_SET_PLATFORM		"SetPlatformSwap"
-
-#define SIGNAL_NAME_SWAP_TYPE		"SwapType"
-#define SIGNAL_NAME_SWAP_START_PID	"SwapStartPid"
+#define SIGNAL_FREEZER_STATE		"FreezerState"
 
 /*
  * Logging
@@ -159,7 +147,6 @@ struct edbus_signal {
 #define SIGNAL_DEVICED_BOOTINGDONE		"BootingDone"
 #define SIGNAL_DEVICED_POWEROFF_STATE		"ChangeState"
 #define SIGNAL_DEVICED_LOW_BATTERY		"BatteryStatusLow"
-#define SIGNAL_DEVICED_EARLY_BOOTING_DONE	"EarlyBootingDone"
 
 /*
  * dump service
@@ -171,16 +158,6 @@ struct edbus_signal {
 #define SIGNAL_DUMP			"Dump"
 #define SIGNAL_DUMP_START	"Start"
 #define SIGNAL_DUMP_FINISH	"Finish"
-
-/*
- * Crash
- */
-#define CRASH_BUS_NAME              "org.tizen.system.crash"
-#define CRASH_OBJECT_PATH           "/Org/Tizen/System/Crash"
-#define CRASH_INTERFACE_NAME        CRASH_BUS_NAME
-#define CRASH_PATH_CRASH            CRASH_OBJECT_PATH"/Crash"
-#define CRASH_INTERFACE_CRASH       CRASH_INTERFACE_NAME".Crash"
-#define PROCESS_CRASHED             "ProcessCrashed"
 
 /*
  * AMD

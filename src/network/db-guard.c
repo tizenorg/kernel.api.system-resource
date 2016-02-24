@@ -87,15 +87,12 @@ static void erase_old_entries(void)
 	};
 	resourced_tm_interval interval;
 	time_t until = time(0);
-	char buf[30];
-
 	until -= ERASE_INTERVAL;
 
 	interval.from = 0;
 	interval.to = until;
 	rule.interval = &interval;
-	if (asctime_r(localtime(&until), buf))
-		_D("Reset datausage statistics till %s", buf);
+	_D("Reset datausage statistics till %s", asctime(localtime(&until)));
 	ret_msg_if(reset_data_usage(&rule),
 		"Failed to reset statistics");
 }

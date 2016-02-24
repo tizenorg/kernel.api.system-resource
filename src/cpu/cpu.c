@@ -46,7 +46,6 @@
 #include "file-helper.h"
 
 #define CPU_DEFAULT_CGROUP "/sys/fs/cgroup/cpu"
-#define CPU_SYSTEM_GROUP "/sys/fs/cgroup/cpu/system"
 #define CPU_CONTROL_GROUP "/sys/fs/cgroup/cpu/background"
 #define CPU_CONTROL_CPUQUOTA_GROUP "/sys/fs/cgroup/cpu/background/quota"
 #define CPU_CONTROL_BANDWIDTH	"/cpu.cfs_quota_us"
@@ -124,7 +123,7 @@ static int cpu_move_cgroup(pid_t pid, char *path)
 	return cgroup_write_node(path, CGROUP_FILE_NAME, pid);
 }
 
-static bool cpu_quota_enabled(void)
+static bool is_support_cpuquota(void)
 {
 	return bCPUQuota;
 }
@@ -182,22 +181,20 @@ static int load_cpu_config(struct parse_result *result, void *user_data)
 		}
 	} else if (!strcmp(result->name, "BACKGROUND_CPU_SHARE")) {
 		value = atoi(result->value);
-		if (value) {
+		if (value)
 			cgroup_write_node(CPU_CONTROL_GROUP, CPU_SHARE, value);
-			cgroup_write_node(CPU_SYSTEM_GROUP, CPU_SHARE, value);
-		}
-		if (cpu_quota_enabled())
+		if (is_support_cpuquota())
 			cgroup_write_node(CPU_CONTROL_CPUQUOTA_GROUP, CPU_SHARE, value);
 	} else if (!strcmp(result->name, "BACKGROUND_CPU_MAX_QUOTA")) {
 		value = atoi(result->value);
-		if (value && cpu_quota_enabled()) {
+		if (value && is_support_cpuquota()) {
 			value *= CPU_QUOTA_PERIOD_USEC;
 			cgroup_write_node(CPU_CONTROL_GROUP,
 				    CPU_CONTROL_BANDWIDTH, value);
 		}
 	} else if (!strcmp(result->name, "BACKGROUND_CPU_MIN_QUOTA")) {
 		value = atoi(result->value);
-		if (value && cpu_quota_enabled()) {
+		if (value && is_support_cpuquota()) {
 			value *= CPU_QUOTA_PERIOD_USEC;
 			cgroup_write_node(CPU_CONTROL_CPUQUOTA_GROUP,
 				    CPU_CONTROL_BANDWIDTH, value);
@@ -230,31 +227,12 @@ static int cpu_foreground_state(void *data)
 static int cpu_background_state(void *data)
 {
 	struct proc_status *ps = (struct proc_status *)data;
+	char *path = CPU_CONTROL_GROUP;
 	_D("cpu_background_state : pid = %d, appname = %s", ps->pid, ps->appid);
 	setpriority(PRIO_PGRP, ps->pid, CPU_BACKGROUND_PRI);
-	cpu_move_cgroup(ps->pid, CPU_CONTROL_GROUP);
-	return RESOURCED_ERROR_NONE;
-}
-
-static int cpu_restrict_state(void *data)
-{
-	struct proc_status *ps = (struct proc_status *)data;
-	_D("cpu_restrict_state : pid = %d, appname = %s", ps->pid, ps->appid);
-	if (ps->pai->proc_exclude || ps->pai->runtime_exclude)
-		return RESOURCED_ERROR_NONE;
-	cpu_move_cgroup(ps->pid, CPU_CONTROL_CPUQUOTA_GROUP);
-	return RESOURCED_ERROR_NONE;
-}
-
-static int cpu_active_state(void *data)
-{
-	struct proc_status *ps = (struct proc_status *)data;
-	int oom_score_adj = 0, ret;
-	_D("cpu_active_state : pid = %d, appname = %s", ps->pid, ps->appid);
-	ret = proc_get_oom_score_adj(ps->pid, &oom_score_adj);
-	if (ret || oom_score_adj != OOMADJ_BACKGRD_LOCKED)
-		return RESOURCED_ERROR_NONE;
-	cpu_move_cgroup(ps->pid, CPU_DEFAULT_CGROUP);
+	if (is_support_cpuquota())
+		path = CPU_CONTROL_CPUQUOTA_GROUP;
+	cpu_move_cgroup(ps->pid, path);
 	return RESOURCED_ERROR_NONE;
 }
 
@@ -276,15 +254,6 @@ static int cpu_prelaunch_state(void *data)
 			}
 		}
 	}
-	return RESOURCED_ERROR_NONE;
-}
-
-static int cpu_system_state(void *data)
-{
-	struct proc_status *ps = (struct proc_status *)data;
-
-	_D("cpu receive system service : pid = %d", ps->pid);
-	cpu_move_cgroup(ps->pid, CPU_SYSTEM_GROUP);
 	return RESOURCED_ERROR_NONE;
 }
 
@@ -336,10 +305,8 @@ static int resourced_cpu_init(void *data)
 	_D("resourced_cpu_init");
 	ret_code = make_cgroup_subdir(CPU_DEFAULT_CGROUP, "background", NULL);
 	ret_value_msg_if(ret_code < 0, ret_code, "cpu init failed\n");
-	ret_code = make_cgroup_subdir(CPU_DEFAULT_CGROUP, "system", NULL);
-	ret_value_msg_if(ret_code < 0, ret_code, "cpu init failed\n");
 	cpu_check_cpuquota();
-	if (cpu_quota_enabled()) {
+	if (is_support_cpuquota()) {
 		ret_code = make_cgroup_subdir(CPU_CONTROL_GROUP, "quota", NULL);
 		ret_value_msg_if(ret_code < 0, ret_code, "create service cgroup failed\n");
 	}
@@ -353,16 +320,11 @@ static int resourced_cpu_init(void *data)
 	register_notifier(RESOURCED_NOTIFIER_APP_FOREGRD, cpu_foreground_state);
 	register_notifier(RESOURCED_NOTIFIER_APP_BACKGRD, cpu_background_state);
 	register_notifier(RESOURCED_NOTIFIER_APP_PRELAUNCH, cpu_prelaunch_state);
-	register_notifier(RESOURCED_NOTIFIER_SYSTEM_SERVICE, cpu_system_state);
+	register_notifier(RESOURCED_NOTIFIER_SYSTEM_SERVICE, cpu_control_state);
 	register_notifier(RESOURCED_NOTIFIER_APP_TERMINATE_START, cpu_terminatestart_state);
 	register_notifier(RESOURCED_NOTIFIER_CONTROL_EXCLUDE, cpu_exclude_state);
 	register_notifier(RESOURCED_NOTIFIER_WIDGET_FOREGRD, cpu_foreground_state);
-	register_notifier(RESOURCED_NOTIFIER_WIDGET_BACKGRD, cpu_control_state);	
-	if (cpu_quota_enabled()) {
-		register_notifier(RESOURCED_NOTIFIER_APP_SUSPEND_READY,
-		    cpu_restrict_state);
-		register_notifier(RESOURCED_NOTIFIER_APP_ACTIVE, cpu_active_state);
-	}
+	register_notifier(RESOURCED_NOTIFIER_WIDGET_BACKGRD, cpu_control_state);
 	return RESOURCED_ERROR_NONE;
 }
 
@@ -373,16 +335,11 @@ static int resourced_cpu_finalize(void *data)
 	unregister_notifier(RESOURCED_NOTIFIER_APP_FOREGRD, cpu_foreground_state);
 	unregister_notifier(RESOURCED_NOTIFIER_APP_BACKGRD, cpu_background_state);
 	unregister_notifier(RESOURCED_NOTIFIER_APP_PRELAUNCH, cpu_prelaunch_state);
-	unregister_notifier(RESOURCED_NOTIFIER_SYSTEM_SERVICE, cpu_system_state);
+	unregister_notifier(RESOURCED_NOTIFIER_SYSTEM_SERVICE, cpu_control_state);
 	unregister_notifier(RESOURCED_NOTIFIER_APP_TERMINATE_START, cpu_terminatestart_state);
 	unregister_notifier(RESOURCED_NOTIFIER_CONTROL_EXCLUDE, cpu_exclude_state);
 	unregister_notifier(RESOURCED_NOTIFIER_WIDGET_FOREGRD, cpu_foreground_state);
 	unregister_notifier(RESOURCED_NOTIFIER_WIDGET_BACKGRD, cpu_control_state);
-	if (cpu_quota_enabled()) {
-		unregister_notifier(RESOURCED_NOTIFIER_APP_SUSPEND_READY,
-		    cpu_restrict_state);
-		unregister_notifier(RESOURCED_NOTIFIER_APP_ACTIVE, cpu_active_state);
-	}
 	return RESOURCED_ERROR_NONE;
 }
 

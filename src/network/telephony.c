@@ -190,7 +190,7 @@ static void init_available_modems(void)
 		dbus_message_iter_get_basic (&iter_array, &name);
 		_D("modem name %s", name);
 		dbus_message_iter_next (&iter_array);
-		state->name = strndup(name, strlen(name));
+		state->name = strdup(name);
 		state->roaming = false;
 		modems = g_slist_prepend(modems, state);
 		if (check_current_modem(state->name, current_sim))
@@ -534,7 +534,7 @@ static void regist_sim_status_callbacks(void)
 
 static void init_telephony(void)
 {
-	if (!modems) {
+	execute_once {
 		init_available_modems();
 		init_roaming_states();
 		init_modem_imsi();

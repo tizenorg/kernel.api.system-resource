@@ -26,7 +26,6 @@
  *
  */
 
-#include <Eina.h>
 #include "trace.h"
 #include "edbus-handler.h"
 #include "macro.h"
@@ -48,7 +47,6 @@ static struct edbus_object edbus_objects[] = {
 	{ RESOURCED_PATH_PROCESS, RESOURCED_INTERFACE_PROCESS, NULL, NULL },
 	{ RESOURCED_PATH_LOGGING, RESOURCED_INTERFACE_LOGGING, NULL, NULL },
 	{ RESOURCED_PATH_NETWORK, RESOURCED_INTERFACE_NETWORK, NULL, NULL },
-	{ RESOURCED_PATH_SLUGGISH, RESOURCED_INTERFACE_SLUGGISH, NULL, NULL },
 	{ RESOURCED_PATH_DBUS,    RESOURCED_INTERFACE_DBUS,    NULL, NULL },
 	/* Add new object & interface here*/
 };
@@ -171,6 +169,10 @@ DBusMessage *dbus_method_sync(const char *dest, const char *path,
 
 	reply = dbus_connection_send_with_reply_and_block(conn, msg,
 			DBUS_REPLY_TIMEOUT, &err);
+	if (!reply) {
+		_E("dbus_connection_send error(No reply)");
+	}
+
 	if (dbus_error_is_set(&err)) {
 		_E("dbus_connection_send error(%s:%s)", err.name, err.message);
 		dbus_error_free(&err);
@@ -485,9 +487,6 @@ resourced_ret_c edbus_add_methods(const char *path,
 	}
 
 	for (i = 0; i < size; i++) {
-		if (!edbus_methods[i].member || !edbus_methods[i].func)
-			continue;
-
 		ret = e_dbus_interface_method_add(iface,
 				    edbus_methods[i].member,
 				    edbus_methods[i].signature,

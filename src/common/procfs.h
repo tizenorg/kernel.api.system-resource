@@ -38,21 +38,10 @@
 #define OOMADJ_APP_LIMIT		OOMADJ_INIT
 #define OOMADJ_APP_MAX			(990)
 #define OOMADJ_APP_INCREASE		(30)
-
-/* OOMADJ_SERVICE_DEFAULT is default value for processes PROC_TYPE_SERVICE */
 #define OOMADJ_SERVICE_GAP		(10)
 #define OOMADJ_SERVICE_DEFAULT		(OOMADJ_BACKGRD_LOCKED - OOMADJ_SERVICE_GAP)
-
-/*
- * OOMADJ_PREVIOUS_DEFAULT is default value for processes that are
- * moved out from foreground cgroup ( >= OOMADJ_BACKGRD_PERCEPTIBLE)
- * but being in a state before background cgroup ( >= OOMADJ_BACKGRD_UNLOCKED).
- * In the middle it is possible to have process in favorite cgroup (== OOMADJ_FAVORITE).
- */
-#define OOMADJ_PREVIOUS_GAP		(10)
-#define OOMADJ_PREVIOUS_DEFAULT		(OOMADJ_BACKGRD_LOCKED - OOMADJ_PREVIOUS_GAP)
-#define OOMADJ_PREVIOUS_FOREGRD	(OOMADJ_FOREGRD_UNLOCKED - OOMADJ_PREVIOUS_GAP)
-#define OOMADJ_PREVIOUS_BACKGRD	(OOMADJ_BACKGRD_UNLOCKED - OOMADJ_PREVIOUS_GAP)
+#define OOMADJ_SERVICE_FOREGRD		(OOMADJ_FOREGRD_UNLOCKED - OOMADJ_SERVICE_GAP)
+#define OOMADJ_SERVICE_BACKGRD		(OOMADJ_BACKGRD_UNLOCKED - OOMADJ_SERVICE_GAP)
 
 
 #define PROC_OOM_SCORE_ADJ_PATH "/proc/%d/oom_score_adj"
@@ -103,22 +92,10 @@ int proc_get_mem_usage(pid_t pid, unsigned int *vmsize, unsigned int *vmrss);
 unsigned int proc_get_mem_available(void);
 
 /**
- * @desc get info corresponding size(kB) from /proc/meminfo
- * @return 0 on success, return negative error code on fail.
- */
-int proc_get_meminfo(const char *info, unsigned int *size);
-
-/**
  * @desc get number of CPUs from /proc/cpuinfo
  * @return 0 if the number can't be found or number of CPUs
  */
 unsigned int proc_get_cpu_number(void);
-
-/**
- * @desc get utime and stime from /proc/{pid}/stat file.
- * @return negative value if error or pid doesn't exist
- */
-int proc_get_cpu_time(pid_t pid, unsigned long *utime, unsigned long *stime);
 
 /**
  * @desc get command line from /proc/{pid}/cmdline without any truncation

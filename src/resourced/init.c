@@ -26,6 +26,7 @@
 #include "const.h"
 #include "counter.h"
 #include "edbus-handler.h"
+#include "freezer-process.h"
 #include "cgroup.h"
 #include "init.h"
 #include "macro.h"

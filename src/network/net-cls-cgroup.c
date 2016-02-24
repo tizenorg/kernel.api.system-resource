@@ -160,7 +160,7 @@ populate_classids_with_pids(const char *dir_name_buf, size_t dir_name_buf_len,
 u_int32_t get_classid_by_app_id(const char *app_id, int create)
 {
 	int ret = 0;
-	bool exists;
+	int exists;
 	u_int32_t classid = RESOURCED_UNKNOWN_CLASSID;
 
 	if (!strcmp(app_id, RESOURCED_ALL_APP))
@@ -279,10 +279,10 @@ int_array *get_monitored_pids(void)
 static char *get_app_id_by_classid_local(const u_int32_t classid)
 {
 	if (classid == RESOURCED_TETHERING_APP_CLASSID)
-		return strndup(TETHERING_APP_NAME, strlen(TETHERING_APP_NAME));
+		return strdup(TETHERING_APP_NAME);
 	array_foreach(tc, struct task_classid, tasks_classids)
 		if (classid == tc->classid)
-			return strndup(tc->cgroup_name, strlen(tc->cgroup_name));
+			return strdup(tc->cgroup_name);
 	return 0;
 }
 
@@ -307,7 +307,7 @@ char *get_app_id_by_classid(const u_int32_t classid, const bool update_state)
 API resourced_ret_c make_net_cls_cgroup(const char *pkg_name, u_int32_t classid)
 {
 	resourced_ret_c ret = RESOURCED_ERROR_NONE;
-	bool exists = false;
+	int exists = 0;
 
 	if (pkg_name == NULL) {
 		_E("package name must be not empty");
@@ -340,12 +340,7 @@ API resourced_ret_c place_pids_to_net_cgroup(const int pid, const char *pkg_name
 
 API resourced_ret_c make_net_cls_cgroup_with_pid(const int pid, const char *pkg_name)
 {
-	resourced_ret_c ret;
-
-	if (!strcmp(pkg_name, RESOURCED_BACKGROUND_APP_NAME))
-		ret = make_net_cls_cgroup(pkg_name, RESOURCED_BACKGROUND_APP_CLASSID);
-	else
-		ret = make_net_cls_cgroup(pkg_name, RESOURCED_UNKNOWN_CLASSID);
+	resourced_ret_c ret = make_net_cls_cgroup(pkg_name, RESOURCED_UNKNOWN_CLASSID);
 	ret_value_msg_if(ret != RESOURCED_ERROR_NONE, ret, "Can't create cgroup %s!", pkg_name);
 	_SD("pkg: %s; pid: %d\n", pkg_name, pid);
 	return place_pids_to_net_cgroup(pid, pkg_name);

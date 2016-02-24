@@ -25,6 +25,7 @@
  *
  */
 
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
@@ -38,7 +39,7 @@
 #include "notifier.h"
 #include "heart.h"
 #include "logging.h"
-#include "heart-common.h"
+#include "logging-common.h"
 #include "decision.h"
 #include "decision-memory.h"
 

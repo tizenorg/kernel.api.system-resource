@@ -24,7 +24,6 @@
 #include "cgroup.h"
 #include "const.h"
 #include "macro.h"
-#include "util.h"
 #include "resourced.h"
 #include "trace.h"
 #include "file-helper.h"
@@ -46,7 +45,7 @@
 #define RELEASE_AGENT	"/release_agent"
 #define NOTIFY_ON_RELEASE  "/notify_on_release"
 
-static bool is_cgroup_exists(const char *cgroup_full_path)
+static int is_cgroup_exists(const char *cgroup_full_path)
 {
 	struct stat stat_buf;
 	return stat(cgroup_full_path, &stat_buf) == 0;
@@ -72,9 +71,10 @@ resourced_ret_c place_pid_to_cgroup_by_fullpath(const char *cgroup_full_path,
 	int ret = cgroup_write_node(cgroup_full_path, CGROUP_FILE_NAME,
 		(u_int32_t)pid);
 
+	strerror_r(errno, buf, sizeof(buf));
 	ret_value_msg_if(ret < 0, RESOURCED_ERROR_FAIL,
 		"Failed place all pid to cgroup %s, error %s",
-			cgroup_full_path, strerror_r(errno, buf, sizeof(buf)));
+			cgroup_full_path, buf);
 	return RESOURCED_ERROR_NONE;
 }
 
@@ -155,11 +155,10 @@ int cgroup_read_node(const char *cgroup_name,
 	return ret;
 }
 
-int make_cgroup_subdir(const char* parentdir, const char* cgroup_name, bool *already)
+int make_cgroup_subdir(char* parentdir, char* cgroup_name, int *exists)
 {
+	int cgroup_exists = 0, ret = 0;
 	char buf[MAX_PATH_LENGTH];
-	bool cgroup_exists;
-	int ret = 0;
 
 	if (parentdir)
 		ret = snprintf(buf, sizeof(buf), "%s/%s", parentdir, cgroup_name);
@@ -177,8 +176,8 @@ int make_cgroup_subdir(const char* parentdir, const char* cgroup_name, bool *alr
 				cgroup_name);
 	}
 
-	if (already)
-		*already = cgroup_exists;
+	if (exists)
+		*exists = cgroup_exists;
 
 	return RESOURCED_ERROR_NONE;
 }
@@ -189,18 +188,10 @@ int mount_cgroup_subsystem(char* source, char* mount_point, char* opts)
 		    MS_NODEV | MS_NOSUID | MS_NOEXEC, opts);
 }
 
-int set_release_agent(const char *cgroup_subsys, const char *release_agent)
+void set_release_agent(const char *cgroup_subsys, const char *release_agent)
 {
-	_cleanup_free_ char *buf = NULL;
-	int r;
-
-	r = asprintf(&buf, "%s/%s", DEFAULT_CGROUP, cgroup_subsys);
-	if (r < 0)
-		return -ENOMEM;
-
-	r = cgroup_write_node_str(buf, RELEASE_AGENT, release_agent);
-	if (r < 0)
-		return r;
-
-	return cgroup_write_node_str(buf, NOTIFY_ON_RELEASE, "1");
+	char buf[MAX_PATH_LENGTH];
+	snprintf(buf, sizeof(buf), "%s/%s", DEFAULT_CGROUP, cgroup_subsys);
+	cgroup_write_node_str((const char *)buf, RELEASE_AGENT, release_agent);
+	cgroup_write_node_str((const char *)buf, NOTIFY_ON_RELEASE, "1");
 }

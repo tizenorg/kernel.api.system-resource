@@ -237,7 +237,6 @@ enum proc_cgroup_cmd_type { /** cgroup command type **/
 	PROC_CGROUP_GET_STAT,
 	PROC_CGROUP_GET_STATUS,
 	PROC_CGROUP_GET_OOMSCORE,
-	PROC_CGROUP_GET_PGID_CMDLINE,
 };
 
 
@@ -281,7 +280,7 @@ resourced_ret_c proc_cgroup_launch(int type, pid_t pid, char* app_id, char* pkg_
  * @param len read length
  *
  */
-resourced_ret_c proc_stat_get_pid_entry(int type, pid_t pid, char* buf, int len);
+resourced_ret_c proc_stat_get_pid_entry(int type, pid_t pid, char *buf, int len);
 
 /**
  * @brief sweep memory about background processes

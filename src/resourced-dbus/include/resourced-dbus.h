@@ -24,7 +24,7 @@
 #include <dbus/dbus.h>
 #include <E_DBus.h>
 
-E_DBus_Connection *resourced_dbus_monitor_new(DBusBusType type, DBusHandleMessageFunction filter_func, const char * const *filters);
+E_DBus_Connection *resourced_dbus_monitor_new(DBusBusType type, DBusHandleMessageFunction filter_func, const char **filters);
 
 bool resourced_dbus_pid_has_busname(pid_t pid);
 unsigned int resourced_dbus_pid_get_busnames(pid_t pid, char ***busnames);

@@ -252,7 +252,6 @@ static dbus_bool_t deserialize_restriction(
 		DBUS_TYPE_INT32, &(rest->snd_warning_limit),
 		DBUS_TYPE_INT32, &(rest->rcv_warning_limit),
 		DBUS_TYPE_INT32, &(rest->roaming),
-		DBUS_TYPE_STRING, &(rest->imsi),
 		DBUS_TYPE_INVALID);
 
 	if (ret == FALSE) {
@@ -275,7 +274,6 @@ static DBusMessage *edbus_process_restriction(E_DBus_Object *obj,
 	char *appid = NULL;
 	resourced_net_restrictions rest = { 0, };
 	enum traffic_restriction_type rst_type;
-	resourced_restriction_info rst_info = {0,};
 
 	ret = dbus_message_is_method_call(
 	    msg, RESOURCED_INTERFACE_NETWORK,
@@ -294,13 +292,10 @@ static DBusMessage *edbus_process_restriction(E_DBus_Object *obj,
 		goto out;
 	}
 	rest.ifname = get_iftype_name(rest.iftype);
-
-	rst_info.ifname = get_iftype_name(RESOURCED_IFACE_DATACALL);
-	get_restriction_info(appid, RESOURCED_IFACE_DATACALL, &rst_info);
 	/* TODO : 2SIM device with restriction per application */
 	/* restriction is not imsi based */
 	dbus_ret = proc_keep_restriction(appid, NONE_QUOTA_ID, &rest,
-					     rst_type, false, rst_info.rst_state);
+					     rst_type, false);
 out:
 	dbus_message_iter_append_basic(&iter, DBUS_TYPE_INT32, &dbus_ret);
 
@@ -1004,8 +999,6 @@ static void free_restriction_info(void *data)
 		free((char *)info->app_id);
 	if (info->ifname)
 		free((char *)info->ifname);
-	if (info->imsi)
-		free((char *)info->imsi);
 }
 
 static void store_restrictions(struct counter_arg *arg)
@@ -1037,7 +1030,7 @@ static void store_restrictions(struct counter_arg *arg)
 		update_restriction_db(info->app_id, info->iftype,
 				      info->rcv_limit, info->send_limit,
 				      info->rst_state, info->quota_id,
-				      info->roaming, info->ifname, info->imsi);
+				      info->roaming, info->ifname);
 	}
 
 	g_slist_free_full(rst_list, free_restriction_info);
@@ -1212,7 +1205,7 @@ static void _process_restriction(struct nl_family_params *cmd)
 			send_restriction_notification(app_id, &du_quota);
 		update_restriction_db(app_id, iftype, 0, 0,
 				      RESOURCED_RESTRICTION_ACTIVATED,
-		rst_info.quota_id, rst_info.roaming, rst_info.ifname, rst_info.imsi);
+		rst_info.quota_id, rst_info.roaming, rst_info.ifname);
 	} else if (notification_type == RESTRICTION_NOTI_C_WARNING) {
 		/* nested if due error message correctness */
 		if (rst_info.quota_id != NONE_QUOTA_ID)

@@ -45,8 +45,7 @@ resourced_ret_c update_restriction_db(
 	const resourced_restriction_state rst_state,
 	const int quota_id,
 	const resourced_roaming_type roaming,
-	const char *ifname,
-	const char *imsi);
+	const char *ifname);
 
 /**
  * @desc Get restriction info from database
@@ -69,7 +68,7 @@ resourced_ret_c process_kernel_restriction(
 resourced_ret_c proc_keep_restriction(
 	const char *app_id, int quota_id, const resourced_net_restrictions *rst,
 	const enum traffic_restriction_type rst_type,
-	bool skip_kernel_op, resourced_restriction_state rst_state);
+	bool skip_kernel_op);
 
 resourced_ret_c remove_restriction_local(const char *app_id,
 					 const resourced_iface_type iftype,

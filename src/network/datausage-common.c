@@ -58,8 +58,7 @@
 #include <Ecore.h>
 
 #ifdef CONFIG_DATAUSAGE_NFACCT
-#define RESTRICTION_EXCLUDE(x) ((x) == RESOURCED_RESTRICTION_EXCLUDED)
-static bool display_off = false;
+
 
 struct make_rule_context {
 	struct counter_arg *carg;
@@ -103,7 +102,6 @@ struct nfacct_value {
 	int quota_id;
 	resourced_roaming_type roaming;
 	resourced_restriction_state rst_state;
-	char *imsi;
 	/* end restriction part */
 	resourced_state_t ground; /* background/foreground state */
 };
@@ -375,32 +373,12 @@ void mark_background(const char *app_id)
 		_D("There is no entry for %s in counter tree", app_id);
 }
 
-void move_pids_tree_to_cgroup(struct proc_app_info *pai,
-	    const char *pkg_name)
-{
-	GSList *iter = NULL;
-	struct proc_app_info *ai = NULL;
-	if (pai->childs) {
-		gslist_for_each_item(iter, pai->childs) {
-			struct child_pid *child = (struct child_pid *)(iter->data);
-			place_pids_to_net_cgroup(child->pid, pkg_name);
-		}
-	}
-	if (pai->program && pai->program->svc_list) {
-		gslist_for_each_item(iter, pai->program->svc_list) {
-			ai = (struct proc_app_info *)(iter->data);
-			place_pids_to_net_cgroup(ai->main_pid, pkg_name);
-		}
-	}
-}
-
 static gboolean move_proc_background_cgroup(gpointer key, gpointer value,
 		gpointer data)
 {
 	struct nfacct_value *nf_value = (struct nfacct_value *)value;
 	struct nfacct_key *nf_key = (struct nfacct_key *)key;
 	resourced_state_t state = (resourced_state_t )data;
-	struct proc_app_info *pai = NULL;
 
 	if (nf_value->ground != RESOURCED_STATE_BACKGROUND ||
 	    nf_key->classid == RESOURCED_ALL_APP_CLASSID ||
@@ -408,20 +386,12 @@ static gboolean move_proc_background_cgroup(gpointer key, gpointer value,
 		return FALSE;
 
 	/* move into background cgroup */
-	if (state == RESOURCED_STATE_BACKGROUND &&
-	    !RESTRICTION_EXCLUDE(nf_value->rst_state)) {
-		make_net_cls_cgroup_with_pid(nf_value->pid, RESOURCED_BACKGROUND_APP_NAME);
-		pai = find_app_info(nf_value->pid);
-		if (pai)
-			move_pids_tree_to_cgroup(pai, RESOURCED_BACKGROUND_APP_NAME);
-	} else {
+	if (state == RESOURCED_STATE_BACKGROUND)
+		place_pids_to_net_cgroup(nf_value->pid, RESOURCED_BACKGROUND_APP_NAME);
+	else {
 		char *app_id = get_app_id_by_classid(nf_key->classid, false);
-		if (app_id) {
-			make_net_cls_cgroup_with_pid(nf_value->pid, app_id);
-			pai = find_app_info(nf_value->pid);
-			if (pai)
-				move_pids_tree_to_cgroup(pai, app_id);
-		}
+		if (app_id)
+			place_pids_to_net_cgroup(nf_value->pid, app_id);
 	}
 	return FALSE;
 }
@@ -434,14 +404,6 @@ void foreground_apps(struct counter_arg *carg)
 void background_apps(struct counter_arg *carg)
 {
 	g_tree_foreach(carg->nf_cntrs, move_proc_background_cgroup, (void *)RESOURCED_STATE_BACKGROUND);
-}
-
-static int resourced_app_wakeup(void *data)
-{
-	struct proc_status *p_data = (struct proc_status*)data;
-	place_pids_to_net_cgroup(p_data->pid, p_data->appid);
-
-	return 0;
 }
 
 static int app_resume_cb(void *data)
@@ -478,10 +440,9 @@ static int app_resume_cb(void *data)
 		if (ret != RESOURCED_ERROR_NONE)
 			_D("Failed to start network counting.");
 
-	} else if (background_quota) {
-		make_net_cls_cgroup_with_pid(p_data->pid, p_data->appid);
-		move_pids_tree_to_cgroup(p_data->pai, p_data->appid);
-	}
+	} else if(background_quota)
+		place_pids_to_net_cgroup(p_data->pid, p_data->appid);
+
 	return ret;
 }
 
@@ -521,7 +482,6 @@ static int app_backgrnd_cb(void *data)
 	struct shared_modules_data *m_data;
 	struct counter_arg *carg;
 	u_int32_t classid;
-	resourced_restriction_info rst_info = {0};
 	int nfacct_number = 0;
 	bool background_quota = false;
 	ret_value_msg_if(p_data == NULL, RESOURCED_ERROR_FAIL,
@@ -535,7 +495,6 @@ static int app_backgrnd_cb(void *data)
 	ret_value_msg_if(carg == NULL, RESOURCED_ERROR_FAIL,
 		"Cant' get counter arg!");
 	classid = get_classid_by_pid(carg, p_data->pid);
-
 	ret_value_msg_if(classid == RESOURCED_UNKNOWN_CLASSID,
 		RESOURCED_ERROR_FAIL, "No classid to terminate!");
 
@@ -543,20 +502,14 @@ static int app_backgrnd_cb(void *data)
 
 	nfacct_number = mark_ground_state(carg, classid,
 			RESOURCED_STATE_BACKGROUND);
-
-	rst_info.ifname = get_iftype_name(RESOURCED_IFACE_DATACALL);
-	get_restriction_info(p_data->appid, RESOURCED_IFACE_DATACALL, &rst_info);
-
-	if (nfacct_number && !RESTRICTION_EXCLUDE(rst_info.rst_state)) {
+	if (nfacct_number) {
 		background_quota = check_background_applied();
 		/**
 		 * if we have applied background quota, put current pid into
 		 * background cgroup
 		 */
-		if (background_quota) {
-			make_net_cls_cgroup_with_pid(p_data->pid, RESOURCED_BACKGROUND_APP_NAME);
-			move_pids_tree_to_cgroup(p_data->pai, RESOURCED_BACKGROUND_APP_NAME);
-		}
+		if (background_quota)
+			place_pids_to_net_cgroup(p_data->pid, RESOURCED_BACKGROUND_APP_NAME);
 	}
 
 	if (!nfacct_number)
@@ -687,12 +640,12 @@ static inline char *get_public_appid(const uint32_t classid)
 	 * what's why it's not in get_app_id_by_classid
 	 */
 	if (classid == RESOURCED_ALL_APP_CLASSID)
-		return strndup(RESOURCED_ALL_APP, strlen(RESOURCED_ALL_APP));
+		return strdup(RESOURCED_ALL_APP);
 	if (classid == RESOURCED_BACKGROUND_APP_CLASSID)
-		return strndup(RESOURCED_BACKGROUND_APP_NAME, strlen(RESOURCED_BACKGROUND_APP_NAME));
+		return strdup(RESOURCED_BACKGROUND_APP_NAME);
 
 	appid = get_app_id_by_classid(classid, true);
-	return !appid ? strndup(UNKNOWN_APP, strlen(UNKNOWN_APP)) : appid;
+	return !appid ? strdup(UNKNOWN_APP) : appid;
 }
 
 static void init_nfacct(u_int32_t classid, pid_t pid,
@@ -714,17 +667,6 @@ static void init_nfacct(u_int32_t classid, pid_t pid,
 
 static resourced_ret_c del_counter(struct nfacct_rule *counter)
 {
-	/**
-	 * when the display is off and the system moves to the
-	 * suspend state, the iptables processes created to remove
-	 * counter will move to the suspend state and when the
-	 * system wakes up, all the iptable processes runs simulatneously
-	 * which might cause OOM condition. so we will not remove the
-	 * counter when the screen is OFF and update/delete counter
-	 * when the screen is ON.
-	 */
-	if (display_off)
-		return RESOURCED_ERROR_NONE;
 	return produce_net_rule(counter, 0, 0,
 		NFACCT_ACTION_DELETE, get_jump_by_intend(counter),
 		counter->iotype);
@@ -825,7 +767,7 @@ static int fill_restriction(struct rtattr *attr_list[__NFACCT_MAX],
 			_D("No need to send restriction notification");
 		update_restriction_db(app_id, counter.iftype, 0, 0,
 				      RESOURCED_RESTRICTION_ACTIVATED,
-				      quota_id, du_quota.roaming_type, counter.ifname, du_quota.imsi);
+				      quota_id, du_quota.roaming_type, counter.ifname);
 	} else if (counter.intend == NFACCT_WARN) {
 		if (quota_id != NONE_QUOTA_ID)
 			send_restriction_warn_notification(app_id, &du_quota);
@@ -941,18 +883,6 @@ iface_callback *create_counter_callback(void)
 #define NET_RELEASE_AGENT "/usr/bin/net-cls-release"
 #define NET_CLS_SUBSYS "net_cls"
 
-static int resourced_lcd_on(void *data)
-{
-	display_off = false;
-	return RESOURCED_ERROR_NONE;
-}
-
-static int resourced_lcd_off(void *data)
-{
-	display_off = true;
-	return RESOURCED_ERROR_NONE;
-}
-
 static int resourced_datausage_init(void *data)
 {
 	struct net_counter_opts *net_opts = (struct net_counter_opts *)malloc(
@@ -979,9 +909,6 @@ static int resourced_datausage_init(void *data)
 	register_notifier(RESOURCED_NOTIFIER_SERVICE_LAUNCH, app_launch_srv_cb);
 	register_notifier(RESOURCED_NOTIFIER_APP_TERMINATED, app_terminated_cb);
 	register_notifier(RESOURCED_NOTIFIER_APP_BACKGRD, app_backgrnd_cb);
-	register_notifier(RESOURCED_NOTIFIER_LCD_ON, resourced_lcd_on);
-	register_notifier(RESOURCED_NOTIFIER_LCD_OFF, resourced_lcd_off);
-	register_notifier(RESOURCED_NOTIFIER_APP_WAKEUP, resourced_app_wakeup);
 	m_data->carg = init_counter_arg(net_opts);
 	ret_code = resourced_iface_init();
 	ret_value_msg_if(ret_code < 0, ret_code, "resourced_iface_init failed");
@@ -1025,9 +952,6 @@ static int resourced_datausage_finalize(void *data)
 	unregister_notifier(RESOURCED_NOTIFIER_SERVICE_LAUNCH, app_launch_srv_cb);
 	unregister_notifier(RESOURCED_NOTIFIER_APP_TERMINATED, app_terminated_cb);
 	unregister_notifier(RESOURCED_NOTIFIER_APP_BACKGRD, app_backgrnd_cb);
-	unregister_notifier(RESOURCED_NOTIFIER_LCD_ON, resourced_lcd_on);
-	unregister_notifier(RESOURCED_NOTIFIER_LCD_OFF, resourced_lcd_off);
-	unregister_notifier(RESOURCED_NOTIFIER_APP_WAKEUP, resourced_app_wakeup);
 	resourced_iface_finalize();
 	finalize_iftypes();
 	finilize_telephony();
@@ -1126,8 +1050,6 @@ void keep_counter(struct nfacct_rule *counter)
 	value->roaming = counter->roaming;
 	value->fini = 0;
 	value->ground = RESOURCED_STATE_FOREGROUND;
-	if (counter->iftype == RESOURCED_IFACE_DATACALL)
-		value->imsi = get_imsi_hash(get_current_modem_imsi());
 
 #ifdef DEBUG_ENABLED
 	if (key && key->intend == NFACCT_BLOCK)
@@ -1158,12 +1080,7 @@ void finalize_counter(struct nfacct_rule *counter)
 	_D("counter ifname: %s", counter->ifname);
 #endif /* DEBUG_ENABLED */
 
-	if (!value) {
-#ifdef DEBUG_ENABLED
-		_D("Can't find counter", counter->name);
-#endif
-		return;
-	}
+	ret_msg_if(!value, "Can't find counter", counter->name);
 	if (!CHECK_BIT(value->fini, NFACCT_FINAL_REMOVE)) {
 #ifdef DEBUG_ENABLED
 		_D("No need to remove value %p", value);
@@ -1260,9 +1177,7 @@ static gboolean fill_restriction_list(gpointer key, gpointer value,
 	if (info->roaming == RESOURCED_ROAMING_UNKNOWN)
 		info->roaming = nf_value->roaming;
 	if (!info->ifname)
-		info->ifname = strndup(nf_key->ifname, strlen(nf_key->ifname));
-	if (!info->imsi)
-		info->imsi = strndup(nf_value->imsi, strlen(nf_value->imsi));
+		info->ifname = strdup(nf_key->ifname);
 	if (!info->app_id)
 		info->app_id = app_id;
 	if (!info->rst_state)
@@ -1517,17 +1432,6 @@ static void turn_on_counters(resourced_iface_type iftype, struct counter_arg *ca
 static void turn_off_counters(resourced_iface_type iftype, struct counter_arg *carg)
 {
 	struct iftype_context ctx;
-	/**
-	 * when the display is off and the system moves to the
-	 * suspend state, the iptables processes created to remove
-	 * counter will move to the suspend state and when the
-	 * system wakes up, all the iptable processes runs simulatneously
-	 * which might cause OOM condition. so we will not remove the
-	 * counter when the screen is OFF and update/delete counter
-	 * when the screen is ON.
-	 */
-	if (display_off)
-		return;
 	ret_msg_if(iftype == RESOURCED_IFACE_UNKNOWN,
 		"Can't get iftype for remove counter");
 
@@ -1630,7 +1534,7 @@ static gboolean deactivate_each_counter_by_iftype(gpointer key,
 	del_ctx->nfacct_value = nfacct_value;
 	del_ctx->carg = ctx->carg;
 	nfacct_value->state = NFACCT_STATE_DEL_DELAYED;
-	ecore_timer_add(1000 * 60, del_counter_delayed, del_ctx);
+	ecore_timer_add(0, del_counter_delayed, del_ctx);
 
 	return FALSE;
 }

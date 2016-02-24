@@ -40,23 +40,22 @@
 #include "trace.h"
 #include "tethering-restriction.h"
 #include "datausage-common.h"
-#include "proc-common.h"
 
 #define SET_NET_RESTRICTIONS "REPLACE INTO restrictions "     \
 	"(binpath, rcv_limit, send_limit, iftype, rst_state, "\
-	" quota_id, roaming, ifname, imsi) " \
-	"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+	" quota_id, roaming, ifname) " \
+	"VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
 
 #define GET_NET_RESTRICTION "SELECT rcv_limit, send_limit, " \
-	" rst_state, roaming, quota_id, imsi FROM restrictions " \
+	" rst_state, roaming, quota_id FROM restrictions " \
 	"WHERE binpath = ? AND iftype = ? AND ifname = ?"
 #define GET_NET_RESTRICTION_BY_QUOTA "SELECT rcv_limit, send_limit, " \
-	" rst_state, roaming, ifname, imsi FROM restrictions " \
+	" rst_state, roaming, ifname FROM restrictions " \
 	"WHERE binpath = ? AND iftype = ? AND quota_id = ?"
 
 
 #define RESET_RESTRICTIONS "DELETE FROM restrictions "	\
-	"WHERE binpath=? AND iftype=? AND imsi = ? AND quota_id = ?"
+	"WHERE binpath=? AND iftype=? AND ifname = ? AND quota_id = ?"
 
 static sqlite3_stmt *update_rst_stm;
 static sqlite3_stmt *reset_rst_stm;
@@ -80,7 +79,7 @@ handle_error:
 
 static resourced_ret_c reset_restriction_db(const char *app_id,
 					    const resourced_iface_type iftype,
-					    const char *imsi,
+					    const char *ifname,
 					    const int quota_id)
 {
 	resourced_ret_c error_code = init_reset_rst();
@@ -89,12 +88,12 @@ static resourced_ret_c reset_restriction_db(const char *app_id,
 
 	_D("app_id %s",app_id);
 	_D("iftype %d", iftype);
-	_D("imsi %s", imsi);
+	_D("ifname %s", ifname);
 	_D("quota_id %d", quota_id);
 
 	DB_ACTION(sqlite3_bind_text(reset_rst_stm, 1, app_id, -1, SQLITE_TRANSIENT));
 	DB_ACTION(sqlite3_bind_int(reset_rst_stm, 2, iftype));
-	DB_ACTION(sqlite3_bind_text(reset_rst_stm, 3, imsi, -1, SQLITE_TRANSIENT));
+	DB_ACTION(sqlite3_bind_text(reset_rst_stm, 3, ifname, -1, SQLITE_TRANSIENT));
 	DB_ACTION(sqlite3_bind_int(reset_rst_stm, 4, quota_id));
 
 	if (sqlite3_step(reset_rst_stm) != SQLITE_DONE)
@@ -132,8 +131,7 @@ resourced_ret_c update_restriction_db(
 	const resourced_restriction_state rst_state,
 	const int quota_id,
 	const resourced_roaming_type roaming,
-	const char *ifname,
-	const char *imsi)
+	const char *ifname)
 {
 	resourced_ret_c error_code = init_update_rest_stmt();
 	ret_value_if(error_code != RESOURCED_ERROR_NONE, error_code);
@@ -146,7 +144,6 @@ resourced_ret_c update_restriction_db(
 	DB_ACTION(sqlite3_bind_int(update_rst_stm, 6, quota_id));
 	DB_ACTION(sqlite3_bind_int(update_rst_stm, 7, roaming));
 	DB_ACTION(sqlite3_bind_text(update_rst_stm, 8, ifname, -1, SQLITE_TRANSIENT));
-	DB_ACTION(sqlite3_bind_text(update_rst_stm, 9, imsi, -1, SQLITE_TRANSIENT));
 
 	if (sqlite3_step(update_rst_stm) != SQLITE_DONE)
 		error_code = RESOURCED_ERROR_DB_FAILED;
@@ -180,7 +177,6 @@ resourced_ret_c get_restriction_info(const char *app_id,
 	static sqlite3_stmt *stm_ifname;
 	static sqlite3_stmt *stm_quota;
 	sqlite3_stmt *stm = 0;
-	char *imsi = NULL;
 
 	ret_value_msg_if(rst == NULL, RESOURCED_ERROR_INVALID_PARAMETER,
 		"Please provide valid restriction argument!");
@@ -226,11 +222,8 @@ resourced_ret_c get_restriction_info(const char *app_id,
 			if (rst->ifname && strlen(rst->ifname))
 				rst->quota_id = sqlite3_column_int(stm, 4);
 			else if (rst->quota_id)
-				rst->ifname = strndup((char *)sqlite3_column_text(stm, 4),
-							strlen((char *)sqlite3_column_text(stm, 4)));
-			imsi = (char *)sqlite3_column_text(stm, 5);
-			if (imsi)
-				rst->imsi = strndup(imsi, strlen(imsi));
+				rst->ifname = strdup((char *)sqlite3_column_text(
+						stm, 4));
 
 			break;
 		case SQLITE_DONE:
@@ -352,7 +345,7 @@ resourced_ret_c process_kernel_restriction(
 
 static bool check_background_app(const char *app_id, const resourced_state_t state)
 {
-	if (state == RESOURCED_STATE_BACKGROUND &&
+	if (state == RESOURCED_STATE_BACKGROUND ||
 	    !strcmp(app_id, RESOURCED_BACKGROUND_APP_NAME)) {
 		return TRUE;
 	}
@@ -363,12 +356,11 @@ resourced_ret_c proc_keep_restriction(
 	const char *app_id, const int quota_id,
 	const resourced_net_restrictions *rst,
 	const enum traffic_restriction_type rst_type,
-	bool skip_kernel_op, resourced_restriction_state current_state)
+	bool skip_kernel_op)
 {
 	u_int32_t app_classid = 0;
 	resourced_iface_type store_iftype;
 	resourced_restriction_state rst_state;
-	struct proc_app_info *pai = NULL;
 	int ret = check_restriction_arguments(app_id, rst, rst_type);
 	ret_value_msg_if(ret != RESOURCED_ERROR_NONE,
 			 RESOURCED_ERROR_INVALID_PARAMETER,
@@ -379,19 +371,16 @@ resourced_ret_c proc_keep_restriction(
 	else
 		app_classid = get_classid_by_app_id(app_id, rst_type != RST_UNSET);
 	if (!skip_kernel_op) {
-		const char *imsi_hash = get_imsi_hash(get_current_modem_imsi());
-		if (imsi_hash && rst->imsi  && !strcmp(imsi_hash, rst->imsi)) {
-			ret = process_kernel_restriction(app_classid, rst, rst_type, quota_id);
-			ret_value_msg_if(ret != RESOURCED_ERROR_NONE, ret,
-			    "Can't keep restriction.");
-		}
+		ret = process_kernel_restriction(app_classid, rst, rst_type, quota_id);
+		ret_value_msg_if(ret != RESOURCED_ERROR_NONE, ret,
+			"Can't keep restriction.");
 	}
 
 	store_iftype = get_store_iftype(app_classid, rst->iftype);
 	rst_state = convert_to_restriction_state(rst_type);
 	_SD("restriction: app_id %s, classid %d, iftype %d, state %d, type %d, "\
 	    "imsi %s, rs_type %d\n", app_id, app_classid,
-	    store_iftype, rst_state, rst_type, rst->imsi, rst->rs_type);
+	    store_iftype, rst_state, rst_type, rst->ifname, rst->rs_type);
 
 	if (!strcmp(app_id, RESOURCED_ALL_APP) &&
 		rst->iftype == RESOURCED_IFACE_ALL)
@@ -399,25 +388,15 @@ resourced_ret_c proc_keep_restriction(
 
 	/* in case of SET/EXCLUDE just update state in db, otherwise remove fro
 	 * db */
-	pai = find_app_info_by_appid(app_id);
-
-	if (rst_type == RST_UNSET) {
-		ret = reset_restriction_db(app_id, store_iftype, rst->imsi,
+	if (rst_type == RST_UNSET)
+		ret = reset_restriction_db(app_id, store_iftype, rst->ifname,
 				quota_id);
-		if (pai && current_state == RESOURCED_RESTRICTION_EXCLUDED) {
-			make_net_cls_cgroup_with_pid(pai->main_pid, RESOURCED_BACKGROUND_APP_NAME);
-			move_pids_tree_to_cgroup(pai, RESOURCED_BACKGROUND_APP_NAME);
-		}
-	} else {
+	else
 		ret = update_restriction_db(app_id, store_iftype,
 					    rst->rcv_limit, rst->send_limit,
 					    rst_state, quota_id, rst->roaming,
-					    rst->ifname, rst->imsi);
-		if (pai && rst_type == RST_EXCLUDE) {
-			place_pids_to_net_cgroup(pai->main_pid, app_id);
-			move_pids_tree_to_cgroup(pai, app_id);
-		}
-	}
+					    rst->ifname);
+
 	return ret;
 }
 
@@ -443,9 +422,8 @@ resourced_ret_c remove_restriction_local(const char *app_id,
 	}
 	rst.ifname = (char *)rst_info.ifname;
 	rst.rs_type = ground;
-	rst.imsi = imsi_hash;
 	ret = proc_keep_restriction(app_id, quota_id, &rst,
-					 RST_UNSET, skip_kernel_op, rst_info.rst_state);
+					 RST_UNSET, skip_kernel_op);
 	if (ret != RESOURCED_ERROR_NONE) {
 		_D("Can't keep restriction");
 	}
@@ -466,7 +444,6 @@ resourced_ret_c exclude_restriction_local(const char *app_id,
 
 	rst.iftype = iftype;
 	rst.ifname = get_iftype_name(rst.iftype);
-	rst.imsi = imsi_hash;
 	return proc_keep_restriction(app_id, quota_id, &rst, RST_EXCLUDE,
-			skip_kernel_op, RESOURCED_RESTRICTION_EXCLUDED);
+			skip_kernel_op);
 }

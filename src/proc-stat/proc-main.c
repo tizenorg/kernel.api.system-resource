@@ -28,7 +28,6 @@
 #include <Ecore_File.h>
 #include <pthread.h>
 
-#include "freezer.h"
 #include "notifier.h"
 #include "proc-process.h"
 #include "proc-main.h"
@@ -38,21 +37,22 @@
 #include "proc-handler.h"
 #include "proc-monitor.h"
 #include "module.h"
+#include "freezer.h"
 #include "macro.h"
 #include "appid-helper.h"
 #include "lowmem-handler.h"
 #include "procfs.h"
 #include "appinfo-list.h"
-#include "util.h"
 
 static GHashTable *proc_exclude_list;
 static Ecore_File_Monitor *exclude_list_monitor;
 static const unsigned int exclude_list_limit = 1024;
+int proc_freeze_late_control;
 static const struct module_ops *freezer;
 static GSList *proc_module;  /* proc sub-module list */
 
 #define BASE_UGPATH_PREFIX "/usr/ug/bin"
-#define LOG_PREFIX "resourced"
+#define LOG_PREFIX "resourced.log"
 #define TIZEN_SYSTEM_APPID "org.tizen.system"
 
 GSList *proc_app_list;
@@ -113,15 +113,13 @@ void proc_add_child_pid(struct proc_app_info *pai, pid_t pid)
 	pai->childs = g_slist_prepend(pai->childs, new_pid_info(pid));
 }
 
-void proc_set_process_memory_state(struct proc_app_info *pai,
-	int memcg_idx, struct memcg_info *memcg_info, int oom_score_adj)
+void proc_set_process_info_memcg(struct proc_app_info *pai,
+	int memcg_idx, struct memcg_info *memcg_info)
 {
 	if (!pai)
 		return;
-
-	pai->memory.memcg_idx= memcg_idx;
-	pai->memory.memcg_info = memcg_info;
-	pai->memory.oom_score_adj = oom_score_adj;
+	pai->memcg_idx = memcg_idx;
+	pai->memcg_info = memcg_info;
 }
 
 /*
@@ -177,7 +175,7 @@ struct proc_program_info *find_program_info(const char *pkgname)
 resourced_ret_c proc_set_runtime_exclude_list(const int pid, int type)
 {
 	struct proc_app_info *pai = NULL;
-	struct proc_status ps = {0};
+	struct proc_status proc_data = {0};
 
 	pai = find_app_info(pid);
 	if (!pai)
@@ -194,10 +192,10 @@ resourced_ret_c proc_set_runtime_exclude_list(const int pid, int type)
 	_D("pid %d set proc exclude list, type = %d, exclude = %d",
 		    pid, type, pai->runtime_exclude);
 
-	ps.pid = pid;
-	ps.pai = pai;
+	proc_data.pid = pid;
+	proc_data.pai = pai;
 	if (type == PROC_EXCLUDE)
-		resourced_notify(RESOURCED_NOTIFIER_APP_WAKEUP, &ps);
+		resourced_notify(RESOURCED_NOTIFIER_APP_WAKEUP, &proc_data);
 	return RESOURCED_ERROR_NONE;
 }
 
@@ -421,51 +419,50 @@ int proc_get_svc_state(struct proc_program_info *ppi)
 
 static void proc_dump_process_list(FILE *fp)
 {
-	GSList *iter, *iter_child;
+	GSList *iter, *iter_app, *iter_pid;
+	struct proc_program_info *ppi = NULL;
 	struct proc_app_info *pai = NULL;
 	int index = 0, oom_score_adj;
 
-	LOG_DUMP(fp, "[APPLICATION LISTS]\n");
-	gslist_for_each_item(iter, proc_app_list) {
-		char *typestr;
-		unsigned int size;
-		unsigned long utime, stime;
+	LOG_DUMP(fp, "[PROGRAM LISTS]\n");
+	gslist_for_each_item(iter, proc_program_list) {
+		ppi = (struct proc_program_info *)iter->data;
+		LOG_DUMP(fp, "index : %d, pkgname : %s, state : %d\n",
+		    index, ppi->pkgname, proc_get_svc_state(ppi));
+		gslist_for_each_item(iter_app, ppi->app_list) {
+			pai = (struct proc_app_info *)iter_app->data;
+			if (proc_get_oom_score_adj(pai->main_pid,
+				    &oom_score_adj) < 0)
+				continue;
+			if (!is_ui_app(pai->type))
+				continue;
 
-		pai = (struct proc_app_info *)iter->data;
-		if (proc_get_oom_score_adj(pai->main_pid, &oom_score_adj) < 0)
-			continue;
+			LOG_DUMP(fp, "\t UI APP, pid : %d, appid : %s, oom_score : %d, "
+				    "lru : %d, proc_exclude : %d, runtime_exclude : %d, "
+				    "flags : %X\n",
+				    pai->main_pid, pai->appid, oom_score_adj,
+				    pai->lru_state, pai->proc_exclude,
+				    pai->runtime_exclude, pai->flags);
 
-		if (!pai->ai)
-			continue;
-
-		if (is_ui_app(pai->type))
-			typestr = "UI APP";
-		else if (pai->type == PROC_TYPE_SERVICE)
-			typestr = "SVC APP";
-		else
-			continue;
-
-		LOG_DUMP(fp, "index : %d, type : %s, pkgname : %s, appid : %s\n"
-		    "\t lru : %d, proc_exclude : %d, runtime_exclude : %d, flags : %X, "
-		    "state : %d\n", index, typestr, pai->ai->pkgname, pai->ai->appid,
-		    pai->lru_state, pai->proc_exclude, pai->runtime_exclude,
-		    pai->flags, pai->state);
-
-		proc_get_mem_usage(pai->main_pid, NULL, &size);
-		proc_get_cpu_time(pai->main_pid, &utime, &stime);
-		LOG_DUMP(fp, "\t main pid : %d, oom score : %d, memory rss : %d KB,"
-		    "utime : %lu, stime : %lu\n", pai->main_pid, oom_score_adj, size,
-		    utime, stime);
-		if (pai->childs) {
-			struct child_pid *child;
-			gslist_for_each_item(iter_child, pai->childs) {
-				child = (struct child_pid *)iter_child->data;
-				proc_get_mem_usage(child->pid, NULL, &size);
-				proc_get_cpu_time(child->pid, &utime, &stime);
-				LOG_DUMP(fp, "\t main pid : %d, oom score : %d, "
-					"memory rss : %dKB, utime : %lu, stime : %lu\n",
-					pai->main_pid, oom_score_adj, size, utime, stime);
+			if (pai->childs) {
+				struct child_pid *child;
+				gslist_for_each_item(iter_pid, pai->childs) {
+					child = (struct child_pid *)iter_pid->data;
+					LOG_DUMP(fp, "\t child pid : %d", child->pid);
+				}
+				LOG_DUMP(fp, "\n");
 			}
+		}
+		gslist_for_each_item(iter_app, ppi->svc_list) {
+			pai = (struct proc_app_info *)iter_app->data;
+			if (proc_get_oom_score_adj(pai->main_pid,
+				    &oom_score_adj) < 0)
+				continue;
+			LOG_DUMP(fp, "\t SVC APP, pid : %d, appid : %s, oom_score : %d, "
+				    "proc_exclude : %d, runtime_exclude : %d, flags : %X\n",
+				    pai->main_pid, pai->appid, oom_score_adj,
+				    pai->proc_exclude, pai->runtime_exclude,
+				    pai->flags);
 		}
 		index++;
 	}
@@ -685,6 +682,16 @@ int proc_get_freezer_status()
 	return ret;
 }
 
+int get_proc_freezer_late_control(void)
+{
+	return proc_freeze_late_control;
+}
+
+void set_proc_freezer_late_control(int value)
+{
+	proc_freeze_late_control = value;
+}
+
 int proc_get_appflag(const pid_t pid)
 {
 	struct proc_app_info *pai =
@@ -703,7 +710,7 @@ void proc_set_group(pid_t onwerpid, pid_t childpid, char *pkgname)
 	int oom_score_adj = 0;
 	struct proc_program_info *ppi;
 	struct proc_app_info *pai, *owner;
-	struct proc_status ps = {0};
+	struct proc_status proc_data = {0};
 
 	if (onwerpid <= 0 || childpid <=0)
 		return;
@@ -715,38 +722,34 @@ void proc_set_group(pid_t onwerpid, pid_t childpid, char *pkgname)
 
 	if (pkgname && pai) {
 		/*
-		 * when child application with appid has owner pai and ppi
-		 * check and remove them
+		 * when some application with appid migrated to owner program
+		 * check previous ppi and remove if it's exist
 		 */
-		if (pai->main_pid == childpid) {
-			ppi = pai->program;
-			if (ppi)
-				ppi->app_list = g_slist_remove(ppi->app_list, pai);
-			proc_app_list = g_slist_remove(proc_app_list, pai);
-			free(pai);
-		} else {
-			_D("main pid(%d) was different from childpid(%d)",
-			    pai->main_pid, childpid);
-			_remove_child_pids(pai, childpid);
+		ppi = find_program_info(pkgname);
+		if (ppi)
+			ppi->app_list = g_slist_remove(ppi->app_list, pai);
+
+		ppi = owner->program;
+		if (ppi) {
+			ppi->app_list = g_slist_prepend(ppi->app_list, pai);
+			pai->program = ppi;
 		}
+	} else {
+		/*
+		 * when some process like webprocess needs to group in owner app
+		 * add to child lists in the proc app info
+		 */
+		if (proc_get_oom_score_adj(onwerpid, &oom_score_adj) < 0) {
+			_D("owner pid(%d) was already terminated", onwerpid);
+			return;
+		}
+		proc_add_child_pid(owner, childpid);
+		if (oom_score_adj <= OOMADJ_BACKGRD_LOCKED) {
+			proc_data.pid = childpid;
+			resourced_notify(RESOURCED_NOTIFIER_APP_WAKEUP, &proc_data);
+		}
+		proc_set_oom_score_adj(childpid, oom_score_adj);
 	}
-	/*
-	 * when some process like webprocess or
-	 * UI application that has transparent with owner application
-	 * needs to group in owner app
-	 * and adds to child lists in the proc app info
-	 */
-	if (proc_get_oom_score_adj(onwerpid, &oom_score_adj) < 0) {
-		_D("owner pid(%d) was already terminated", onwerpid);
-		return;
-	}
-	proc_add_child_pid(owner, childpid);
-	if (oom_score_adj <= OOMADJ_BACKGRD_LOCKED) {
-		ps.pid = childpid;
-		ps.appid = owner->appid;
-		resourced_notify(RESOURCED_NOTIFIER_APP_WAKEUP, &ps);
-	}
-	proc_set_oom_score_adj(childpid, oom_score_adj);
 }
 
 bool proc_check_lru_suspend(int val, int lru)
@@ -814,7 +817,7 @@ int resourced_proc_status_change(int status, pid_t pid, char *app_name, char *pk
 {
 	int ret = 0, oom_score_adj = 0, notitype;
 	char pidbuf[MAX_DEC_SIZE(int)];
-	struct proc_status ps = {0};
+	struct proc_status proc_data = {0};
 	struct proc_program_info *ppi;
 
 	if (!pid) {
@@ -835,18 +838,18 @@ int resourced_proc_status_change(int status, pid_t pid, char *app_name, char *pk
 		return RESOURCED_ERROR_FAIL;
 	}
 
-	ps.pid = pid;
-	ps.appid = app_name;
-	ps.pai = NULL;
+	proc_data.pid = pid;
+	proc_data.appid = app_name;
+	proc_data.pai = NULL;
 	switch (status) {
 	case PROC_CGROUP_SET_FOREGRD:
 		_SD("set foreground : %d", pid);
-		ps.pai = find_app_info(pid);
+		proc_data.pai = find_app_info(pid);
 		if (apptype == PROC_TYPE_WIDGET || apptype == PROC_TYPE_WATCH) {
-			if (!ps.pai)
+			if (!proc_data.pai)
 				proc_add_app_list(apptype, pid, app_name, pkg_name);
 			proc_set_oom_score_adj(pid, OOMADJ_FOREGRD_UNLOCKED);
-			resourced_notify(RESOURCED_NOTIFIER_WIDGET_FOREGRD, &ps);
+			resourced_notify(RESOURCED_NOTIFIER_WIDGET_FOREGRD, &proc_data);
 			break;
 		} else {
 			snprintf(pidbuf, sizeof(pidbuf), "%d", pid);
@@ -856,16 +859,16 @@ int resourced_proc_status_change(int status, pid_t pid, char *app_name, char *pk
 				return RESOURCED_ERROR_NO_DATA;
 			notitype = RESOURCED_NOTIFIER_APP_FOREGRD;
 		}
-		if (ps.pai) {
-			ps.appid = ps.pai->appid;
-			resourced_notify(notitype, &ps);
+		if (proc_data.pai) {
+			proc_data.appid = proc_data.pai->appid;
+			resourced_notify(notitype, &proc_data);
 		}
 
 		if (proc_get_freezer_status() == CGROUP_FREEZER_DISABLED)
 			break;
 
 		if (apptype == PROC_TYPE_GUI)
-			resourced_notify(RESOURCED_NOTIFIER_APP_WAKEUP, &ps);
+			resourced_notify(RESOURCED_NOTIFIER_APP_WAKEUP, &proc_data);
 		break;
 	case PROC_CGROUP_SET_LAUNCH_REQUEST:
 		proc_set_oom_score_adj(pid, OOMADJ_INIT);
@@ -878,19 +881,19 @@ int resourced_proc_status_change(int status, pid_t pid, char *app_name, char *pk
 			_SD("launch request %s with pkgname", pkg_name);
 		ret = resourced_proc_excluded(app_name);
 		if (!ret)
-			ps.pai = proc_add_app_list(apptype,
+			proc_data.pai = proc_add_app_list(apptype,
 				    pid, app_name, pkg_name);
-		if (!ps.pai)
+		if (!proc_data.pai)
 			break;
-		if (CHECK_BIT(ps.pai->flags, PROC_BGALLOW))
+		if (CHECK_BIT(proc_data.pai->flags, PROC_BGALLOW))
 			proc_set_runtime_exclude_list(pid, PROC_EXCLUDE);
-		resourced_notify(RESOURCED_NOTIFIER_APP_LAUNCH, &ps);
-		_D("available memory = %u", proc_get_mem_available());
+		resourced_notify(RESOURCED_NOTIFIER_APP_LAUNCH, &proc_data);
+		_E("available memory = %u", proc_get_mem_available());
 		if (proc_get_freezer_status() == CGROUP_FREEZER_DISABLED)
 			break;
-		ppi = ps.pai->program;
+		ppi = proc_data.pai->program;
 		if (ppi->svc_list)
-			resourced_notify(RESOURCED_NOTIFIER_SERVICE_WAKEUP, &ps);
+			resourced_notify(RESOURCED_NOTIFIER_SERVICE_WAKEUP, &proc_data);
 		break;
 	case PROC_CGROUP_SET_SERVICE_REQUEST:
 		if (!app_name) {
@@ -900,14 +903,14 @@ int resourced_proc_status_change(int status, pid_t pid, char *app_name, char *pk
 		_SD("service launch request %s, %d", app_name, pid);
 		if (pkg_name)
 			_SD("launch request %s with pkgname", pkg_name);
-		ps.pai = proc_add_app_list(PROC_TYPE_SERVICE,
+		proc_data.pai = proc_add_app_list(PROC_TYPE_SERVICE,
 				    pid, app_name, pkg_name);
-		if (!ps.pai)
+		if (!proc_data.pai)
 			break;
 		if (resourced_proc_excluded(app_name) == RESOURCED_ERROR_NONE)
-			resourced_notify(RESOURCED_NOTIFIER_SERVICE_LAUNCH, &ps);
-		if (!(CHECK_BIT(ps.pai->flags, PROC_BGCTRL_APP)) ||
-		    CHECK_BIT(ps.pai->flags, PROC_BGALLOW))
+			resourced_notify(RESOURCED_NOTIFIER_SERVICE_LAUNCH, &proc_data);
+		if (!(CHECK_BIT(proc_data.pai->flags, PROC_BGCTRL_APP)) ||
+		    CHECK_BIT(proc_data.pai->flags, PROC_BGALLOW))
 			proc_set_runtime_exclude_list(pid, PROC_EXCLUDE);
 		break;
 	case PROC_CGROUP_SET_RESUME_REQUEST:
@@ -918,48 +921,46 @@ int resourced_proc_status_change(int status, pid_t pid, char *app_name, char *pk
 			return RESOURCED_ERROR_NO_DATA;
 		}
 
-		ps.pai = find_app_info(pid);
-		if (!ps.pai && ! resourced_proc_excluded(app_name))
-			ps.pai = proc_add_app_list(PROC_TYPE_GUI,
+		proc_data.pai = find_app_info(pid);
+		if (!proc_data.pai && ! resourced_proc_excluded(app_name))
+			proc_data.pai = proc_add_app_list(PROC_TYPE_GUI,
 				    pid, app_name, pkg_name);
 
-		if (!ps.pai)
+		if (!proc_data.pai)
 			return RESOURCED_ERROR_NO_DATA;
 
-		ps.pai->lru_state = PROC_ACTIVE;
 		if (apptype == PROC_TYPE_GUI && oom_score_adj >= OOMADJ_FAVORITE) {
-			resourced_notify(RESOURCED_NOTIFIER_APP_RESUME, &ps);
+			resourced_notify(RESOURCED_NOTIFIER_APP_RESUME, &proc_data);
 			proc_set_oom_score_adj(pid, OOMADJ_INIT);
 		}
-		_D("available memory = %u", proc_get_mem_available());
 		if (proc_get_freezer_status() == CGROUP_FREEZER_DISABLED)
 			break;
 		if (apptype == PROC_TYPE_GUI)
-			resourced_notify(RESOURCED_NOTIFIER_APP_WAKEUP, &ps);
+			resourced_notify(RESOURCED_NOTIFIER_APP_WAKEUP, &proc_data);
 		else if (apptype == PROC_TYPE_SERVICE)
-			resourced_notify(RESOURCED_NOTIFIER_SERVICE_WAKEUP, &ps);
+			resourced_notify(RESOURCED_NOTIFIER_SERVICE_WAKEUP, &proc_data);
 		break;
 	case PROC_CGROUP_SET_TERMINATE_REQUEST:
-		ps.pai = find_app_info(pid);
-		ps.pid = pid;
-		resourced_notify(RESOURCED_NOTIFIER_APP_TERMINATE_START, &ps);
-		resourced_notify(RESOURCED_NOTIFIER_APP_WAKEUP, &ps);
+		proc_data.pai = find_app_info(pid);
+		proc_data.pid = pid;
+		resourced_notify(RESOURCED_NOTIFIER_APP_TERMINATE_START, &proc_data);
+		resourced_notify(RESOURCED_NOTIFIER_APP_WAKEUP, &proc_data);
 		break;
 	case PROC_CGROUP_SET_ACTIVE:
 		ret = proc_set_active(pid, oom_score_adj);
 		if (ret != RESOURCED_ERROR_OK)
 			break;
-		resourced_notify(RESOURCED_NOTIFIER_APP_ACTIVE, &ps);
+		resourced_notify(RESOURCED_NOTIFIER_APP_ACTIVE, &proc_data);
 		break;
 	case PROC_CGROUP_SET_BACKGRD:
 		if (apptype == PROC_TYPE_WIDGET  || apptype == PROC_TYPE_WATCH) {
-			ps.pai = find_app_info(pid);
-			if (!ps.pai)
+			proc_data.pai = find_app_info(pid);
+			if (!proc_data.pai)
 				proc_add_app_list(apptype, pid, app_name, pkg_name);
 			proc_set_oom_score_adj(pid, OOMADJ_BACKGRD_PERCEPTIBLE);
 			if (apptype == PROC_TYPE_WATCH)
 				break;
-			resourced_notify(RESOURCED_NOTIFIER_WIDGET_BACKGRD, &ps);
+			resourced_notify(RESOURCED_NOTIFIER_WIDGET_BACKGRD, &proc_data);
 		} else {
 			snprintf(pidbuf, sizeof(pidbuf), "%d", pid);
 			dbus_proc_handler(PREDEF_BACKGRD, pidbuf);
@@ -967,19 +968,19 @@ int resourced_proc_status_change(int status, pid_t pid, char *app_name, char *pk
 			if (ret != 0)
 				break;
 			if ((proc_get_freezer_status() == CGROUP_FREEZER_DISABLED)
-			    || resourced_freezer_proc_late_control())
+			    || get_proc_freezer_late_control())
 				break;
 
-			ps.pai = find_app_info(pid);
-			ps.pid = pid;
-			resourced_notify(RESOURCED_NOTIFIER_APP_WAKEUP, &ps);
+			proc_data.pai = find_app_info(pid);
+			proc_data.pid = pid;
+			resourced_notify(RESOURCED_NOTIFIER_APP_WAKEUP, &proc_data);
 		}
 		break;
 	case PROC_CGROUP_SET_INACTIVE:
 		ret = proc_set_inactive(pid, oom_score_adj);
 		if (ret != RESOURCED_ERROR_OK)
 			break;
-		resourced_notify(RESOURCED_NOTIFIER_APP_INACTIVE, &ps);
+		resourced_notify(RESOURCED_NOTIFIER_APP_INACTIVE, &proc_data);
 		break;
 	case PROC_CGROUP_GET_MEMSWEEP:
 		ret = proc_sweep_memory(PROC_SWEEP_EXCLUDE_ACTIVE, pid);
@@ -988,29 +989,27 @@ int resourced_proc_status_change(int status, pid_t pid, char *app_name, char *pk
 		if (proc_get_freezer_status() == CGROUP_FREEZER_DISABLED)
 			break;
 		if (app_name) {
-			ps.pai = find_app_info_by_appid(app_name);
-			if (!ps.pai) {
-				_E("cannot find proc_app_info of %s", app_name);
+			proc_data.pai = find_app_info_by_appid(app_name);
+			if (!proc_data.pai)
 				break;
-			}
-			ps.pid = ps.pai->main_pid;
-			resourced_notify(RESOURCED_NOTIFIER_APP_WAKEUP, &ps);
+			proc_data.pid = proc_data.pai->main_pid;
+			resourced_notify(RESOURCED_NOTIFIER_APP_WAKEUP, &proc_data);
 		}
 		break;
 	case PROC_CGROUP_SET_PROC_EXCLUDE_REQUEST:
 		proc_set_runtime_exclude_list(pid, PROC_EXCLUDE);
 		break;
 	case PROC_CGROUP_SET_TERMINATED:
-		ps.pai = find_app_info(pid);
-		if (ps.pai)
-			ps.appid = ps.pai->appid;
-		resourced_notify(RESOURCED_NOTIFIER_APP_TERMINATED, &ps);
+		proc_data.pai = find_app_info(pid);
+		if (proc_data.pai)
+			proc_data.appid = proc_data.pai->appid;
+		resourced_notify(RESOURCED_NOTIFIER_APP_TERMINATED, &proc_data);
 		proc_remove_app_list(pid);
 		break;
 	case PROC_CGROUP_SET_SYSTEM_SERVICE:
 		if (oom_score_adj < OOMADJ_BACKGRD_PERCEPTIBLE)
 			proc_set_oom_score_adj(pid, OOMADJ_BACKGRD_PERCEPTIBLE);
-		resourced_notify(RESOURCED_NOTIFIER_SYSTEM_SERVICE, &ps);
+		resourced_notify(RESOURCED_NOTIFIER_SYSTEM_SERVICE, &proc_data);
 		break;
 	default:
 		ret = RESOURCED_ERROR_INVALID_PARAMETER;
@@ -1047,12 +1046,10 @@ int resourced_proc_action(int status, int argnum, char **arg)
 int proc_get_state(int type, pid_t pid, char *buf, int len)
 {
 	int ret = 0;
+
 	switch (type) {
 	case PROC_CGROUP_GET_CMDLINE:
 		ret = proc_get_raw_cmdline(pid, buf, len);
-		break;
-	case PROC_CGROUP_GET_PGID_CMDLINE:
-		ret = proc_get_raw_cmdline(getpgid(pid), buf, len);
 		break;
 	case PROC_CGROUP_GET_EXE:
 		ret = proc_get_exepath(pid, buf, len);
@@ -1077,28 +1074,19 @@ int proc_get_state(int type, pid_t pid, char *buf, int len)
 void resourced_proc_dump(int mode, const char *dirpath)
 {
 	char buf[MAX_PATH_LENGTH];
-	_cleanup_fclose_ FILE *f = NULL;
-
+	FILE *f = NULL;
 	if (dirpath) {
-		time_t now;
-		struct tm cur_tm;
-
-		now = time(NULL);
-		if (localtime_r(&now, &cur_tm) == NULL)
-			_E("Fail to get localtime");
-
-		snprintf(buf, sizeof(buf), "%s/%s_%.4d%.2d%.2d%.2d%.2d%.2d.log",
-		    dirpath, LOG_PREFIX, (1900 + cur_tm.tm_year), 1 + cur_tm.tm_mon,
-		    cur_tm.tm_mday, cur_tm.tm_hour, cur_tm.tm_min,
-		    cur_tm.tm_sec);
+		snprintf(buf, sizeof(buf), "%s/%s", dirpath, LOG_PREFIX);
 		f = fopen(buf, "w+");
 	}
 	proc_dump_process_list(f);
 	modules_dump((void *)f, mode);
+	if (f)
+		fclose(f);
 }
 
 static const struct module_ops proc_modules_ops = {
-	.priority	= MODULE_PRIORITY_EARLY,
+	.priority	= MODULE_PRIORITY_HIGH,
 	.name		= "PROC",
 	.init		= resourced_proc_init,
 	.exit		= resourced_proc_exit,

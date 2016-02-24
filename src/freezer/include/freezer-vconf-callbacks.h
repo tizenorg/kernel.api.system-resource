@@ -1,7 +1,7 @@
 /*
  * resourced
  *
- * Copyright (c) 2015 Samsung Electronics Co., Ltd. All rights reserved.
+ * Copyright (c) 2000 - 2013 Samsung Electronics Co., Ltd. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,17 +14,20 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
- *
-*/
-
-/*
- * @file systemd-util.h
- * @desc Generic Helper functions
  */
 
-#ifndef _RESOURCED_SYSTEMD_UTIL_H_
-#define _RESOURCED_SYSTEMD_UTIL_H_
+/*
+ *  @file: freezer-vconf-callbacks.h
+ *
+ *  @desc Add freezer callback functions to vconf
+ *
+ */
 
-int systemd_get_service_property_as_uint32(const char *unit_name, const char *property, unsigned int *result, char **err_msg);
+#ifndef _RESOURCED_FREEZER_VCONF_CALLBACKS_H
+#define _RESOURCED_FREEZER_VCONF_CALLBACKS_H
 
-#endif /*_RESOURCED_SYSTEMD_UTIL_H_*/
+void resourced_add_vconf_freezer_cb(void);
+
+void resourced_remove_vconf_freezer_cb(void);
+
+#endif /* _RESOURCED_FREEZER_VCONF_CALLBACKS_H */

@@ -64,9 +64,6 @@ static int show_restriction_popup(const char *value, data_usage_quota *du_quota)
 		return RESOURCED_ERROR_FAIL;
 	}
 
-	if (restriction_read_quota(&quota_limit) < 0)
-		_E("Failed to read a quota value");
-
 	if (quota_limit <= 0) {
 		_D("quota_limit is invalid\n");
 		return RESOURCED_ERROR_FAIL;

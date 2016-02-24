@@ -17,31 +17,26 @@
  *
  */
 
+/**
+ * @file freezer-common.h
+ * @desc freezer common process
+ **/
 
-/*
- * @file storage-helper.h
- * @desc Helper functions to get storage details
- */
+#ifndef __FREEZER_COMMON_H__
+#define __FREEZER_COMMON_H__
 
-#ifndef _RESOURCED_STORAGE_HELPER_H_
-#define _RESOURCED_STORAGE_HELPER_H_
+#include <unistd.h>
+#include <glib.h>
+#include <string.h>
 
 #include "resourced.h"
-#include <stdbool.h>
-#include <sys/statvfs.h>
+#include "const.h"
+#include "proc-common.h"
 
-enum storage_type {
-	INTERNAL = 1,
-	EXTERNAL
-};
+#define OOMADJ_FREEZE_INIT          (OOMADJ_BACKGRD_UNLOCKED)
 
-bool is_mounted(const char* path);
+int get_proc_freezer_late_control(void);
+void set_proc_freezer_late_control(int value);
+int proc_get_freezer_status(void);
 
-/**
- * @desc gets storage details
- * @param type-INTERNAL/EXTERNAL, buf-storage details
- * @return negative value if error
- */
-resourced_ret_c storage_get_size(int type, struct statvfs *buf);
-
-#endif  /*_RESOURCED_STORAGE_HELPER_H_*/
+#endif /* __FREEZER_COMMON_H__ */

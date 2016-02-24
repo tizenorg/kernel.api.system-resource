@@ -35,7 +35,6 @@
 struct heart_module_ops {
 	char *name;
 	int (*init) (void *data);
-	int (*dump) (FILE *fp, int mode, void *data);
 	int (*exit) (void *data);
 };
 

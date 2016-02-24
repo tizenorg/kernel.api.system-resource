@@ -1,6 +1,7 @@
 [Unit]
 Description=Resource management daemon
-After=wm_ready.service
+After=tizen-system.target
+Wants=tizen-system.target
 
 [Service]
 Type=notify

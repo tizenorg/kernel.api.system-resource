@@ -83,7 +83,7 @@ struct logging_data {
 	char *data;
 };
 
-typedef void(*logging_info_cb) (struct logging_table_form *data, void *user_data);
+typedef void(*logging_info_cb) (struct logging_table_form *data);
 typedef void(*logging_listener_cb) (char *data);
 
 int logging_init(void *data);
@@ -102,8 +102,7 @@ int logging_get_latest_in_cache(char *name, char *appid, char **data);
 int logging_write(char *name, char *appid, char *pkgid, time_t time, char *data);
 int logging_delete(char *name, char *data);
 int logging_read_foreach(char *name, char *appid, char *pkgid,
-		time_t start_time, time_t end_time, logging_info_cb callback, void *user_data);
-void logging_update(int force);
+		time_t start_time, time_t end_time, logging_info_cb callback);
 void logging_save_to_storage(int force);
 int logging_leveldb_put(char *key, unsigned int key_len, char *value, unsigned int value_len);
 int logging_leveldb_putv(char *key, unsigned int key_len, const char *fmt, ... );

@@ -18,44 +18,16 @@
  */
 
 /**
- * @file memory-common.h
+ * @file memcontrol.h
  * @desc header file for handling memory cgroups
  **/
 
-#ifndef __MEMORY_COMMONL_H__
-#define __MEMORY_COMMONL_H__
+#ifndef __MEMCONTROL_H__
+#define __MEMCONTROL_H__
 
 #include <glib.h>
+#include "lowmem-handler.h"
 #include "const.h"
-
-/*
- * [memory cgroup information]
- * MEMCG_MEMORY : root cgroup for system daemons
- * MEMCG_PLATFORM : platform cgroup for swapping desired platform daemons
- * MEMCG_FOREGROUND : foreground cgroup (oom : 150 ~ 200)
- * MEMCG_PREVIOUS : previous cgroup including service and perciptible (oom : 230 ~ 300)
- * MEMCG_FAVORITE : recently used application (oom : 270)
- * MEMCG_BACKGROUND : background cgroup (oom : 330 ~ )
- * MEMCG_SWAP : swap cgroup (select victims from background applications)
- */
-enum memcg_type {
-	MEMCG_MEMORY,
-	MEMCG_PLATFORM,
-	MEMCG_FOREGROUND,
-	MEMCG_PREVIOUS,
-	MEMCG_FAVORITE,
-	MEMCG_BACKGROUND,
-	MEMCG_SWAP,
-	MEMCG_MAX,
-};
-
-enum {
-	LOWMEM_NORMAL,
-	LOWMEM_SWAP,
-	LOWMEM_LOW,
-	LOWMEM_MEDIUM,
-	LOWMEM_MAX_LEVEL,
-};
 
 /* number of memory cgroups */
 #define MEMCG_DEFAULT_NUM_SUBCGROUP		0
@@ -120,4 +92,4 @@ int memcg_get_usage(struct memcg_info *mi, unsigned int *usage_in_bytes);
  */
 int memcg_get_pids(struct memcg_info *mi, GArray *pids);
 
-#endif /*__MEMORY_COMMONL_H__*/
+#endif /*__MEMCONTROL_H__*/

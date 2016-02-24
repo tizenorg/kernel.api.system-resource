@@ -27,7 +27,6 @@
 #include <sys/types.h>
 #include <Ecore.h>
 
-#include "freezer.h"
 #include "resourced.h"
 #include "trace.h"
 #include "proc-main.h"
@@ -35,7 +34,9 @@
 #include "proc-process.h"
 #include "procfs.h"
 #include "lowmem-common.h"
+#include "freezer-common.h"
 #include "macro.h"
+#include "freezer.h"
 #include "proc-noti.h"
 #include "notifier.h"
 #include "proc-appusage.h"
@@ -72,8 +73,7 @@ static void proc_set_oom_score_childs(GSList *childs, int oom_score_adj)
 	}
 }
 
-static void proc_set_oom_score_services(int state, GSList *svcs,
-    int oom_score_adj)
+static void proc_set_oom_score_services(GSList *svcs, int oom_score_adj)
 {
 	GSList *iter;
 
@@ -82,36 +82,34 @@ static void proc_set_oom_score_services(int state, GSList *svcs,
 
 	gslist_for_each_item(iter, svcs) {
 		struct proc_app_info *svc = (struct proc_app_info *)(iter->data);
-		svc->state = state;
 		proc_set_service_oomscore(svc->main_pid, oom_score_adj);
 	}
 }
 
 static int proc_backgrd_manage(int currentpid, int active, int oom_score_adj)
 {
-	pid_t pid = -1;
-	int flag = RESOURCED_NOTIFIER_APP_BACKGRD;
-	struct proc_status ps;
+	int pid = -1, flag = RESOURCED_NOTIFIER_APP_BACKGRD;
+	struct proc_status proc_data;
 	FILE *fp;
 	char buf[sizeof(PROC_OOM_SCORE_ADJ_PATH) + MAX_DEC_SIZE(int)] = {0};
 	int cur_oom = -1;
 	static int checkprevpid;
-	int freeze_val = resourced_freezer_proc_late_control();
+	int freeze_val = get_proc_freezer_late_control();
 	GSList *iter;
 	struct proc_program_info *ppi;
 	struct proc_app_info *pai = find_app_info(currentpid);
 
-	if (!pai || pai->proc_exclude || pai->main_pid != currentpid) {
+	if (!pai || pai->proc_exclude) {
 		_D("BACKGRD MANAGE : don't manage background application by %d", currentpid);
 		return RESOURCED_ERROR_NONFREEZABLE;
 	}
 
-	ps.pid = currentpid;
-	ps.appid = pai->appid;
-	ps.pai = pai;
+	proc_data.pid = currentpid;
+	proc_data.appid = pai->appid;
+	proc_data.pai = pai;
 	if (active)
 		flag = RESOURCED_NOTIFIER_APP_BACKGRD_ACTIVE;
-	resourced_notify(flag, &ps);
+	resourced_notify(flag, &proc_data);
 
 	if (active)
 		return RESOURCED_ERROR_NONE;
@@ -139,14 +137,6 @@ static int proc_backgrd_manage(int currentpid, int active, int oom_score_adj)
 			}
 			cur_oom = atoi(buf);
 
-			if (spi->lru_state == PROC_BACKGROUND) {
-				memset(&ps, 0, sizeof(struct proc_status));
-				ps.pai = spi;
-				ps.pid = pid;
-				resourced_notify(
-					    RESOURCED_NOTIFIER_APP_SUSPEND_READY,
-					    &ps);
-			}
 			/*
 			 * clear lru offset if platform controls background application
 			 */
@@ -155,12 +145,12 @@ static int proc_backgrd_manage(int currentpid, int active, int oom_score_adj)
 
 			if (proc_check_lru_suspend(lru_offset, spi->lru_state) &&
 			    (proc_check_suspend_state(spi) == PROC_STATE_SUSPEND)) {
-				memset(&ps, 0, sizeof(struct proc_status));
-				ps.pai = spi;
-				ps.pid = pid;
+				memset(&proc_data, 0, sizeof(struct proc_status));
+				proc_data.pai = spi;
+				proc_data.pid = pid;
 				resourced_notify(
-					    RESOURCED_NOTIFIER_APP_SUSPEND,
-					    &ps);
+					    RESOURCED_NOTIFIER_APP_SUSPEND_READY,
+					    &proc_data);
 			}
 
 			if (spi->lru_state >= PROC_BACKGROUND) {
@@ -174,10 +164,10 @@ static int proc_backgrd_manage(int currentpid, int active, int oom_score_adj)
 				fclose(fp);
 				continue;
 			} else if (cur_oom >= OOMADJ_BACKGRD_UNLOCKED) {
-				new_oom = cur_oom + OOMADJ_APP_INCREASE;
+				new_oom = cur_oom+OOMADJ_APP_INCREASE;
 				_D("BACKGRD : process %d set score %d (before %d)",
 						pid, new_oom, cur_oom);
-				proc_set_oom_score_adj(pid, new_oom);
+				fprintf(fp, "%d", new_oom);
 				proc_set_oom_score_childs(spi->childs, new_oom);
 			}
 			fclose(fp);
@@ -198,8 +188,7 @@ static int proc_backgrd_manage(int currentpid, int active, int oom_score_adj)
 	/* change oom score about grouped service processes */
 	ppi = pai->program;
 	if (ppi && proc_get_svc_state(ppi) == PROC_STATE_BACKGROUND)
-		proc_set_oom_score_services(PROC_STATE_BACKGROUND, ppi->svc_list,
-		    oom_score_adj);
+		proc_set_oom_score_services(ppi->svc_list, oom_score_adj);
 
 	checkprevpid = currentpid;
 	return RESOURCED_ERROR_NONE;
@@ -227,8 +216,7 @@ static int proc_foregrd_manage(int pid, int oom_score_adj)
 	/* change oom score about grouped service processes */
 	ppi = pai->program;
 	if (ppi)
-		proc_set_oom_score_services(PROC_STATE_FOREGROUND, ppi->svc_list,
-		    oom_score_adj);
+		proc_set_oom_score_services(ppi->svc_list, oom_score_adj);
 
 	return ret;
 }
@@ -338,11 +326,11 @@ int proc_set_foregrd(pid_t pid, int oom_score_adj)
 	int ret = 0;
 
 	switch (oom_score_adj) {
+	case OOMADJ_FOREGRD_LOCKED:
 	case OOMADJ_FOREGRD_UNLOCKED:
 	case OOMADJ_SU:
 		ret = 0;
 		break;
-	case OOMADJ_FOREGRD_LOCKED:
 	case OOMADJ_BACKGRD_LOCKED:
 		ret = proc_foregrd_manage(pid, OOMADJ_FOREGRD_LOCKED);
 		break;
@@ -415,9 +403,9 @@ int proc_set_active(int pid, int oom_score_adj)
 			pai->lru_state = PROC_ACTIVE;
 		ret = proc_set_oom_score_adj(pid, OOMADJ_BACKGRD_LOCKED);
 		break;
-	case OOMADJ_PREVIOUS_DEFAULT:
-	case OOMADJ_PREVIOUS_BACKGRD:
-		ret = proc_set_oom_score_adj(pid, OOMADJ_PREVIOUS_FOREGRD);
+	case OOMADJ_SERVICE_DEFAULT:
+	case OOMADJ_SERVICE_BACKGRD:
+		ret = proc_set_oom_score_adj(pid, OOMADJ_SERVICE_FOREGRD);
 		break;
 	default:
 		if (oom_score_adj > OOMADJ_BACKGRD_UNLOCKED) {
@@ -454,8 +442,8 @@ int proc_set_inactive(int pid, int oom_score_adj)
 			ret = proc_set_oom_score_adj(pid, OOMADJ_BACKGRD_UNLOCKED);
 		}
 		break;
-	case OOMADJ_PREVIOUS_FOREGRD:
-		ret = proc_set_oom_score_adj(pid, OOMADJ_PREVIOUS_DEFAULT);
+	case OOMADJ_SERVICE_FOREGRD:
+		ret = proc_set_oom_score_adj(pid, OOMADJ_SERVICE_DEFAULT);
 		break;
 	default:
 		if (oom_score_adj > OOMADJ_BACKGRD_UNLOCKED) {

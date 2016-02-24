@@ -348,11 +348,11 @@ static struct filemap_info *filemap_entry_find(struct filemap *fm, struct filema
 			return NULL;
 
 		current = filemap_node_find(fm, root, remaining, str_size);
+		_D("current = %s", current->key);
 		if (!current) {
 			_D("cannot find bt");
 			return NULL;
 		}
-		_D("current = %s", current->key);
 
 		if (completed)
 			break;
@@ -393,7 +393,9 @@ int filemap_write(struct filemap *fm, const char *key, const char *value,
 
 	if (*offset) {
 		fi = filemap_to_info(fm, offset);
-		if (fi && !strcmp(fi->key, key))
+		if (!fi)
+			return RESOURCED_ERROR_FAIL;
+		if (!strcmp(fi->key, key))
 			_D("fi for key %s is found using offset", fi->key);
 		else
 			fi = NULL;

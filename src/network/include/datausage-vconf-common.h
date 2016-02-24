@@ -25,5 +25,4 @@ enum restriction_state {
 };
 
 resourced_ret_c restriction_check_limit_status(int *retval);
-resourced_ret_c restriction_read_quota(int *quota);
 void restriction_set_status(int value);

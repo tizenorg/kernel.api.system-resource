@@ -458,14 +458,7 @@ int main(int argc, char **argv)
 	case RESOURCED_APPLY:
 	{
 		int err = 0;
-		resourced_net_restrictions net_rst = {
-			.rs_type = param.ground,
-			.iftype = param.du_rule.iftype,
-			.roaming = param.roaming_type,
-			.imsi = param.imsi,
-			.send_limit = param.send_limit,
-			.rcv_limit = param.rcv_limit,
-		};
+		resourced_net_restrictions net_rst = {0,};
 
 		if (!param.du_rule.iftype) {
 			fprintf(stderr, "Apply restriction command requires -i\n");
@@ -483,6 +476,10 @@ int main(int argc, char **argv)
 
 		if (err)
 			return err;
+
+		net_rst.send_limit = param.send_limit;
+		net_rst.rcv_limit = param.rcv_limit;
+		net_rst.iftype = param.du_rule.iftype;
 
 		ret_code = set_net_restriction(param.app_id,
 						       &net_rst);
@@ -527,16 +524,9 @@ int main(int argc, char **argv)
 		}
 		break;
 	case RESOURCED_REVERT:
-		if (param.du_rule.iftype) {
-			const resourced_net_restrictions rst = {
-				.rs_type = param.ground,
-				.iftype = param.du_rule.iftype,
-				.roaming = param.roaming_type,
-				.imsi = param.imsi,
-			};
-
-			ret_code = remove_restriction_full(param.app_id, &rst);
-		}
+		if (param.du_rule.iftype)
+			ret_code = remove_restriction_by_iftype(
+				param.app_id, param.du_rule.iftype);
 		else
 			fprintf(stderr, "Revert restriction commands require -i\n");
 		if (ret_code != RESOURCED_ERROR_NONE)

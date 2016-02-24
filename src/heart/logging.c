@@ -25,6 +25,7 @@
  *
  */
 
+#define _GNU_SOURCE
 #include <leveldb/c.h>
 #include <Ecore.h>
 #include <sqlite3.h>
@@ -62,7 +63,7 @@
 #define DELETE_QUERY_WITH_TIME	"DELETE from %s where time < %d;"
 #define DELETE_QUERY_WITH_DATA	"DELETE from %s where data = ?;"
 #define INSERT_QUERY			"INSERT INTO %s values (?, ?, ?, ?, ?);"
-#define SELECT_QUERY			"SELECT * FROM %s WHERE time > %d;"
+#define SELECT_QUERY			"SELECT * FROM %s WHERE time >= %d;"
 
 #define SELECT_BEGIN_QUERY		"SELECT * FROM %s "
 #define SELECT_WHERE_QUERY		"WHERE"
@@ -105,7 +106,6 @@ struct logging_search {
 	char *pkgid;
 	time_t start;
 	time_t end;
-	void *user_data;
 	logging_info_cb func;
 };
 
@@ -315,8 +315,8 @@ int logging_module_init(char *name, enum logging_period max_period,
 
 int logging_module_exit(void)
 {
-	if (!logging_instance)
-		return RESOURCED_ERROR_NONE;
+	assert(logging_instance);
+	assert(logging_instance->ref > 0);
 
 	logging_instance->ref--;
 
@@ -438,6 +438,7 @@ int logging_operate(char *name, char *appid, char *pkgid, time_t time, char *dat
 		free(table);
 		return RESOURCED_ERROR_OUT_OF_MEMORY;
 	}
+
 	table->operation = operation;
 
 	pthread_mutex_lock(&(module->cache_mutex));
@@ -479,11 +480,6 @@ int logging_leveldb_put(char *key, unsigned int key_len, char *value, unsigned i
 	if (!key || !key_len || !value || !value_len)
 		return RESOURCED_ERROR_INVALID_PARAMETER;
 
-	if (!logging_leveldb) {
-		_E("leveldb is not initialized");
-		return RESOURCED_ERROR_DB_FAILED;
-	}
-
 	leveldb_put(logging_leveldb, woptions, key, key_len, value, value_len, &err);
 	if (err != NULL) {
 		_E("Failed to put to leveldb");
@@ -505,11 +501,6 @@ int logging_leveldb_putv(char *key, unsigned int key_len, const char *fmt, ...)
 	if (!key || !key_len || !fmt)
 		return RESOURCED_ERROR_INVALID_PARAMETER;
 
-	if (!logging_leveldb) {
-		_E("leveldb is not initialized");
-		return RESOURCED_ERROR_DB_FAILED;
-	}
-
 	va_start(ap, fmt);
 	vsnprintf(value, LOGGING_BUF_MAX, fmt, ap);
 	va_end(ap);
@@ -519,7 +510,6 @@ int logging_leveldb_putv(char *key, unsigned int key_len, const char *fmt, ...)
 		_E("Failed to get length of string");
 		return RESOURCED_ERROR_DB_FAILED;
 	}
-
 	leveldb_put(logging_leveldb, woptions, key, key_len, value, value_len, &err);
 	if (err != NULL) {
 		_E("Failed to put to leveldb");
@@ -539,11 +529,6 @@ int logging_leveldb_read(char *key, unsigned int key_len, char *value, unsigned 
 
 	if (!key || !key_len || !value || !value_len)
 		return RESOURCED_ERROR_INVALID_PARAMETER;
-
-	if (!logging_leveldb) {
-		_E("leveldb is not initialized");
-		return RESOURCED_ERROR_DB_FAILED;
-	}
 
 	result = leveldb_get(logging_leveldb, roptions, key, key_len, &read_len, &err);
 	if (err != NULL) {
@@ -569,11 +554,6 @@ int logging_leveldb_delete(char *key, unsigned int key_len)
 
 	if (!key || !key_len)
 		return RESOURCED_ERROR_INVALID_PARAMETER;
-
-	if (!logging_leveldb) {
-		_E("leveldb is not initialized");
-		return RESOURCED_ERROR_DB_FAILED;
-	}
 
 	leveldb_delete(logging_leveldb, woptions, key, key_len, &err);
 	if (err != NULL) {
@@ -605,22 +585,24 @@ int logging_get_latest_in_cache(char *name, char *appid, char **data)
 
 	pthread_mutex_lock(&(module->cache_mutex));
 	len = g_queue_get_length(module->cache);
+	pthread_mutex_unlock(&(module->cache_mutex));
+
 	if (!len) {
 		_I("%s cache is empty", module->name);
-		pthread_mutex_unlock(&(module->cache_mutex));
 		return RESOURCED_ERROR_NO_DATA;
 	}
 
 	*data = NULL;
 
 	for (i = 0; i < len; i++) {
+		pthread_mutex_lock(&(module->cache_mutex));
 		table = g_queue_peek_nth(module->cache, i);
 
 		if (table &&
 			!strcmp(appid, table->appid))
 			*data = table->data;
+		pthread_mutex_unlock(&(module->cache_mutex));
 	}
-	pthread_mutex_unlock(&(module->cache_mutex));
 
 	if (!*data) {
 		_E("NOT found in cache %s", appid);
@@ -663,11 +645,11 @@ static void logging_cache_search(struct logging_table_form *data, struct logging
 			return;
 	}
 
-	search->func(data, search->user_data);
+	search->func(data);
 }
 
 int logging_read_foreach(char *name, char *appid, char *pkgid,
-		time_t start_time, time_t end_time, logging_info_cb callback, void *user_data)
+		time_t start_time, time_t end_time, logging_info_cb callback)
 {
 	/* Read from storage (cache & db) */
 	int result;
@@ -690,7 +672,6 @@ int logging_read_foreach(char *name, char *appid, char *pkgid,
 	search.start = 0;
 	search.end = 0;
 	search.func = callback;
-	search.user_data = user_data;
 
 	len = snprintf(buf, LOGGING_BUF_MAX, SELECT_BEGIN_QUERY, name);
 
@@ -764,7 +745,7 @@ int logging_read_foreach(char *name, char *appid, char *pkgid,
 				module->latest_update_time = table.time;
 			table.data = (char *)sqlite3_column_text(stmt, 3);
 
-			callback(&table, user_data);
+			callback(&table);
 			break;
 		case SQLITE_DONE:
 			break;
@@ -877,16 +858,13 @@ static int logging_check_storage_size(const char *db_path)
 	return RESOURCED_ERROR_NONE;
 }
 
-void logging_update(int force)
+static void logging_update(void)
 {
 	int i, ret;
 	sqlite3_stmt *stmt = NULL;
 	struct logging_table_form table;
 	struct logging_module *module;
 	char buf[LOGGING_BUF_MAX] = {0, };
-
-	if (!logging_modules)
-		return;
 
 	for (i = 0; i < logging_modules->len; i++) {
 		module = g_array_index(logging_modules,
@@ -896,7 +874,7 @@ void logging_update(int force)
 		if (module->func == NULL)
 			continue;
 
-		if (!force && module->updated_interval > 0) {
+		if (module->updated_interval > 0) {
 			module->updated_interval -= ONE_MINUTE;
 			continue;
 		}
@@ -922,13 +900,8 @@ void logging_update(int force)
 				table.time = sqlite3_column_int(stmt, 2);
 				if (module->latest_update_time < table.time)
 					module->latest_update_time = table.time;
-				if (asprintf(&(table.data), "%s", (char *)sqlite3_column_text(stmt, 3)) < 0) {
-					_E("asprintf failed");
-					sqlite3_finalize(stmt);
-					return;
-				}
-				module->func(&table, NULL);
-				free(table.data);
+				table.data = (char *)sqlite3_column_text(stmt, 3);
+				module->func(&table);
 				break;
 			case SQLITE_DONE:
 				break;
@@ -958,9 +931,6 @@ void logging_save_to_storage(int force)
 	struct logging_module *module;
 	struct logging_table_form *table;
 
-	if (!logging_modules)
-		return;
-
 	for (i = 0; i < logging_modules->len; i++) {
 		module = g_array_index(logging_modules, struct logging_module *, i);
 
@@ -974,9 +944,10 @@ void logging_save_to_storage(int force)
 		/* find q and pop */
 		pthread_mutex_lock(&(module->cache_mutex));
 		len = g_queue_get_length(module->cache);
+		pthread_mutex_unlock(&(module->cache_mutex));
+
 		if (!len) {
 			_I("%s cache is empty", module->name);
-			pthread_mutex_unlock(&(module->cache_mutex));
 			continue;
 		}
 
@@ -991,11 +962,10 @@ void logging_save_to_storage(int force)
 		FINALIZE_AND_RETURN_IF(ret != SQLITE_OK, _E, "insert %s table failed %s", module->name, sqlite3_errmsg(module->db));
 
 		for (j = 0; j < len; j++) {
+			pthread_mutex_lock(&(module->cache_mutex));
 			table = g_queue_peek_head(module->cache);
-			if (!table)
-				continue;
 
-			if (table->operation == DELETE) {
+			if (table && table->operation == DELETE) {
 				sqlite3_reset(delete_stmt);
 
 				ret = sqlite3_bind_text(delete_stmt, 1, table->data, -1, SQLITE_STATIC);
@@ -1029,13 +999,12 @@ void logging_save_to_storage(int force)
 
 			table = g_queue_pop_head(module->cache);
 			free(table);
+			pthread_mutex_unlock(&(module->cache_mutex));
 		}
-		pthread_mutex_unlock(&(module->cache_mutex));
+
 		sqlite3_exec(module->db, "COMMIT;", NULL, NULL, NULL);
 		sqlite3_finalize(insert_stmt);
-		insert_stmt = NULL;
 		sqlite3_finalize(delete_stmt);
-		delete_stmt = NULL;
 	}
 
 	for (i = 0; i < logging_modules->len; i++) {
@@ -1140,7 +1109,7 @@ static void *logging_update_thread_main(void *arg)
 			break;
 		}
 
-		logging_update(false);
+		logging_update();
 
 		ret = pthread_mutex_unlock(&logging_update_mutex);
 		if (ret) {
@@ -1277,9 +1246,10 @@ int logging_init(void *data)
 	logging_leveldb = leveldb_open(options, LOGGING_LEVEL_DB_FILE_NAME, &err);
 	if (err != NULL) {
 		_E("Failed to open leveldb");
-		free(err);
 		return RESOURCED_ERROR_DB_FAILED;
 	}
+	free(err);
+	err = NULL;
 	roptions = leveldb_readoptions_create();
 	woptions = leveldb_writeoptions_create();
 	leveldb_writeoptions_set_sync(woptions, 1);
@@ -1333,8 +1303,7 @@ int logging_exit(void *data)
 
 	/* DB close */
 	sqlite3_close(logging_db);
-	if (logging_leveldb)
-		leveldb_close(logging_leveldb);
+	leveldb_close(logging_leveldb);
 	_D("logging_exit");
 
 	return RESOURCED_ERROR_NONE;

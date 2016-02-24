@@ -14,21 +14,19 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
  */
 
 /**
- * @file freezer-common.c
- *
- * @desc Freezer common library for resourced
- */
+ * @file logging-memory.h
+ * @desc define structures and functions for logging.
+ **/
 
-#define FREEZER_LATE_CONTROL_DISABLED 0
+#ifndef __LOGGING_MEMORY_H__
+#define __LOGGING_MEMORY_H__
 
-#include "trace.h"
+#include <stdio.h>
 
-int resourced_freezer_proc_late_control(void)
-{
-	_E("Using dummy definition of freezer_proc_get_late_control");
-	return FREEZER_LATE_CONTROL_DISABLED;
-}
-
+int logging_memory_init(void *data);
+int logging_memory_exit(void *data);
+#endif /*__LOGGING_MEMORY_H__*/

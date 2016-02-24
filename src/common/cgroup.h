@@ -27,8 +27,32 @@
 #ifndef _CGROUP_LIBRARY_CGROUP_H_
 #define _CGROUP_LIBRARY_CGROUP_H_
 
+enum freezer_state {
+	CGROUP_FREEZER_DISABLED,		/**< disable means daemon do not
+						     procces freezing request */
+	CGROUP_FREEZER_ENABLED,		/**< enable means daemon process
+						     freezing */
+	CGROUP_FREEZER_INITIALIZED,		/**< initialized means daemon process
+						     freezing, but all processes in frozen cgroup
+						     moved to thawed group for initializing*/
+	CGROUP_FREEZER_PAUSED,			/**< paused means daemon process
+						     freezing, but frozen cgroup
+						     temporary thawed */
+	CGROUP_FREEZER_SUSPEND,		/**< freeze processes in suspend cgroup */
+	CGROUP_FREEZER_RESUME,		/**< thaw processes in suspend cgroup */
+	CGROUP_FREEZER_LATERESUME,	/**< thaw processes lately after turning on LCD */
+};
+
 #define DEFAULT_CGROUP       "/sys/fs/cgroup"
 #define PROC_TASK_CHILDREN   "/proc/%d/task/%d/children"
+
+/**
+ * @desc change freezer state according to type
+ * it can be changed to "frozen" or "thawed" state
+ * @param state @see enum freezer_state
+ * @return negative value if error
+ */
+int cgroup_set_sysfs_state(const enum freezer_state state);
 
 /**
  * @desc Get one unsigned int value from cgroup
@@ -63,11 +87,11 @@ int cgroup_write_node_str(const char *cgroup_name,
  * @desc make cgroup,
  * @param parentdir - parent cgroup path
  * @param cgroup_name - cgroup subdirectory to write
- * @param already - true if subdir already exists, NULL pointer is possible
+ * @param cgroup_exists - 1 if subdir already exists, NULL pointer is possible
  * as formal argument, in this case it will not be filled
  * @return negative value if error
  */
-int make_cgroup_subdir(const char* parentdir, const char* cgroup_name, bool *already);
+int make_cgroup_subdir(char* parentdir, char* cgroup_name, int *cgroup_exists);
 
 /**
  * @desc mount cgroup,
@@ -103,8 +127,7 @@ resourced_ret_c place_pidtree_to_cgroup(const char *cgroup_subsystem,
  * @param cgroup_sussys - cgroup subsystem name, it's relative path to cgroup,
  * relativelly default cgroup path (DEFAULT_CGROUP)
  * @param release_agent full path to release agent executable
- * @return negative value if error
  */
-int set_release_agent(const char *cgroup_subsys, const char *release_agent);
+void set_release_agent(const char *cgroup_subsys, const char *release_agent);
 
 #endif /*_CGROUP_LIBRARY_CGROUP_H_*/

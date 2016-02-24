@@ -50,6 +50,14 @@
 
 #include "helper.h"
 
+/* Memory info (/proc/meminfo) */
+#define MEMINFO_PATH		"/proc/meminfo"
+#define MEMINFO_TOTAL		"MemTotal:"
+#define MEMINFO_FREE		"MemFree:"
+#define MEMINFO_AVAILABLE	"MemAvailable:"
+#define MEMINFO_CACHED		"Cached:"
+#define KBtoMB(x)			((x)>>10)
+
 static struct mapinfo *mi;
 static struct mapinfo *maps;
 static int smaps_initialized;
@@ -324,6 +332,105 @@ void smaps_helper_free(void)
 {
 	free(maps);
 	free(mi);
+}
+
+struct memory_info {
+	unsigned int total;
+	unsigned int free;
+	unsigned int available;
+	unsigned int cached;
+};
+
+static int read_mem_info(char *buf, char *type, unsigned int *val)
+{
+	char *idx;
+
+	if (!type || !buf || !val)
+		return -EINVAL;
+
+	idx = strstr(buf, type);
+	if (!idx)
+		return -ENOENT;
+
+	idx += strlen(type);
+
+	while (*idx < '0' || *idx > '9')
+		idx++;
+
+	*val = strtoul(idx, NULL, 10);
+
+	return 0;
+}
+
+static unsigned int get_mem_info(struct memory_info *info)
+{
+	char buf[PATH_MAX];
+	size_t len;
+	FILE *fp;
+	int ret;
+
+	if (!info)
+		return -EINVAL;
+
+	fp = fopen(MEMINFO_PATH, "r");
+	if (!fp) {
+		ret = -errno;
+		_E("%s open failed(errno:%d)", MEMINFO_PATH, ret);
+		return ret;
+	}
+
+	len = sizeof(buf);
+	while (fgets(buf, len, fp) != NULL) {
+		if (read_mem_info(buf, MEMINFO_TOTAL, &(info->total)) == 0)
+			continue;
+		if (read_mem_info(buf, MEMINFO_FREE, &(info->free)) == 0)
+			continue;
+		if (read_mem_info(buf, MEMINFO_AVAILABLE, &(info->available)) == 0)
+			continue;
+		if (read_mem_info(buf, MEMINFO_CACHED, &(info->cached)) == 0)
+			continue;
+	}
+
+	fclose(fp);
+
+	if (info->available == 0)
+		info->available = info->cached + info->free;
+
+	return 0;
+}
+
+unsigned int get_available(void)
+{
+	int ret;
+	struct memory_info info = {0,};
+	int available = 0;
+
+	ret = get_mem_info(&info);
+	if (ret < 0) {
+		_E("Failed to get mem info (%d)", ret);
+		return available;
+	}
+
+	available = info.available;
+
+	return KBtoMB(available);
+}
+
+unsigned int get_mem_usage(void)
+{
+	int ret;
+	struct memory_info info = {0,};
+	int usage;
+
+	ret = get_mem_info(&info);
+	if (ret < 0) {
+		_E("Failed to get mem info (%d)", ret);
+		return ret;
+	}
+
+	usage = info.total - info.available;
+
+	return KBtoMB(usage);
 }
 
 void memory_level_send_system_event(int lv)

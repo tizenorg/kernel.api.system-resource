@@ -32,8 +32,6 @@
 #include "proc-monitor.h"
 #include "trace.h"
 #include "version.h"
-#include "edbus-handler.h"
-#include "notifier.h"
 
 #include <Ecore.h>
 #include <mcheck.h>
@@ -53,14 +51,7 @@ int main(int argc, char **argv)
 			 "Resourced initialization failed\n");
 	init_modules_arg(&darg);
 	modules_check_runtime_support(NULL);
-	if (check_dbus_active()) {
-		_I("notify relaunch");
-		modules_init(NULL);
-		resourced_notify(RESOURCED_NOTIFIER_BOOTING_DONE, NULL);
-	} else {
-		_I("lauch resourced at first");
-		modules_early_init(NULL);
-	}
+	modules_init(NULL);
 	sd_notify(0, "READY=1");
 
 	ecore_main_loop_begin();

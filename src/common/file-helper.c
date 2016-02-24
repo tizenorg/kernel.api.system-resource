@@ -31,102 +31,111 @@
 #include "file-helper.h"
 #include "trace.h"
 #include "macro.h"
-#include "util.h"
 
-#define BUF_MAX		(BUFSIZ)
-#define BUF_INC_SIZE	(512 << 10)
+#define BUF_MAX         (BUFSIZ)
+#define BUF_INC_SIZE    (512 * 1024)
+#define KB(bytes)       ((bytes)/1024)
 
-int fwrite_str(const char *path, const char *str)
+resourced_ret_c fwrite_str(const char *path, const char *str)
 {
-	_cleanup_fclose_ FILE *f = NULL;
+	FILE *f;
 	int ret;
 
-	assert(path);
-	assert(str);
+	ret_value_msg_if(!path, RESOURCED_ERROR_INVALID_PARAMETER,
+			 "please provide valid name file!\n");
+	ret_value_msg_if(!str, RESOURCED_ERROR_INVALID_PARAMETER,
+			 "please provide valid string!\n");
 
 	f = fopen(path, "w");
-	ret_value_errno_msg_if(!f, -errno,
-			       "Fail to open file %s", path);
+	ret_value_errno_msg_if(!f, RESOURCED_ERROR_FAIL,
+			"Fail to file  %s open.", path);
 
 	ret = fputs(str, f);
-	ret_value_errno_msg_if(ret == EOF, errno ? -errno : -EIO,
-			       "Fail to write file");
+	fclose(f);
+	ret_value_errno_msg_if(ret == EOF, RESOURCED_ERROR_FAIL,
+			       "Fail to write file\n");
 
 	return RESOURCED_ERROR_NONE;
 }
 
-int fwrite_int(const char *path, const int number)
+resourced_ret_c fwrite_int(const char *path, const int number)
 {
-	_cleanup_free_ char *digit_buf = NULL;
+	char digit_buf[MAX_DEC_SIZE(int)];
 	int ret;
 
-	ret = asprintf(&digit_buf, "%d", number);
-	ret_value_errno_msg_if(ret < 0, -ENOMEM,
-			       "sprintf failed\n");
+	ret = snprintf(digit_buf, sizeof(digit_buf), "%d", number);
+	ret_value_errno_msg_if(ret < 0, RESOURCED_ERROR_FAIL,
+			       "snprintf failed\n");
 
 	return fwrite_str(path, digit_buf);
 }
 
-int fwrite_uint(const char *path, const u_int32_t number)
+resourced_ret_c fwrite_uint(const char *path, const u_int32_t number)
 {
-	_cleanup_free_ char *digit_buf = NULL;
+	char digit_buf[MAX_DEC_SIZE(u_int32_t)];
 	int ret;
 
-	ret = asprintf(&digit_buf, "%d", number);
-	ret_value_errno_msg_if(ret < 0, -ENOMEM,
-			       "sprintf failed\n");
+	ret = snprintf(digit_buf, sizeof(digit_buf), "%u", number);
+	ret_value_errno_msg_if(ret < 0, RESOURCED_ERROR_FAIL,
+			       "snprintf failed\n");
 
 	return fwrite_str(path, digit_buf);
 }
 
-int fread_int(const char *path, int32_t *number)
+resourced_ret_c fread_int(const char *path, int32_t *number)
 {
-	_cleanup_fclose_ FILE *f = NULL;
+	FILE *f;
 	int ret;
 
 	f = fopen(path, "r");
-	ret_value_errno_msg_if(!f, -errno,
-			       "Fail to open  %s file.", path);
+
+	ret_value_errno_msg_if(!f, RESOURCED_ERROR_FAIL,
+			"Fail to open  %s file.", path);
 
 	ret = fscanf(f, "%d", number);
-	ret_value_errno_msg_if(ret == EOF, -errno,
+	fclose(f);
+	ret_value_errno_msg_if(ret == EOF, RESOURCED_ERROR_FAIL,
 			       "Fail to read file\n");
 
 	return RESOURCED_ERROR_NONE;
 }
 
-int fread_uint(const char *path, u_int32_t *number)
+resourced_ret_c fread_uint(const char *path, u_int32_t *number)
 {
-	_cleanup_fclose_ FILE *f = NULL;
+	FILE *f;
 	int ret;
 
 	f = fopen(path, "r");
-	ret_value_errno_msg_if(!f, -errno,
-			       "Fail to open %s file.", path);
+
+	ret_value_errno_msg_if(!f, RESOURCED_ERROR_FAIL,
+			"Fail to open %s file.", path);
 
 	ret = fscanf(f, "%u", number);
-	ret_value_errno_msg_if(ret == EOF, -errno,
+	fclose(f);
+	ret_value_errno_msg_if(ret == EOF, RESOURCED_ERROR_FAIL,
 			       "Fail to read file\n");
 
 	return RESOURCED_ERROR_NONE;
 }
 
-int fwrite_array(const char *path, const void *array,
-		 const size_t size_of_elem,
-		 const size_t numb_of_elem)
+resourced_ret_c fwrite_array(const char *path, const void *array,
+			     const size_t size_of_elem,
+			     const size_t numb_of_elem)
 {
-	_cleanup_fclose_ FILE *f = NULL;
+	FILE *f;
 	int ret;
 
-	assert(path);
-	assert(array);
+	ret_value_msg_if(!array, RESOURCED_ERROR_INVALID_PARAMETER,
+			 "please provide valid array of elements!\n");
 
 	f = fopen(path, "w");
-	ret_value_errno_msg_if(!f, -errno,
+
+	ret_value_errno_msg_if(!f, RESOURCED_ERROR_FAIL,
 			       "Failed open %s file", path);
 
 	ret = fwrite(array, size_of_elem, numb_of_elem, f);
-	ret_value_errno_msg_if(ret != numb_of_elem, -errno,
+	fclose(f);
+	ret_value_errno_msg_if(ret != numb_of_elem, RESOURCED_ERROR_FAIL,
 			       "Failed write array into %s file", path);
 
 	return RESOURCED_ERROR_NONE;
@@ -141,13 +150,10 @@ char* cread(const char* path)
 	ssize_t	ret;
 	char*	ptr = text;
 	size_t	cap = size;
-	_cleanup_close_ int fd = -1;
+	int	fd  = open(path, O_RDONLY);
 
-	assert(path);
-
-	fd = open(path, O_RDONLY);
 	if (fd < 0) {
-		_E("Failed to open %s: %m", path);
+		_E("%s open error", path);
 		return NULL;
 	}
 
@@ -171,9 +177,9 @@ char* cread(const char* path)
 		} else if (ret > 0) {
 			cap -= ret;
 			ptr += ret;
-		} else
-			free(text);
+		}
 	} while (ret > 0);
+	close(fd);
 
 	return (ret < 0 ? NULL : text);
 }
@@ -196,30 +202,4 @@ char* cgets(char** contents)
 	}
 
 	return NULL;
-}
-
-int copy_file(char *dest, char *src)
-{
-	_cleanup_fclose_ FILE *fps = NULL;
-	_cleanup_fclose_ FILE *fpd = NULL;
-	char buf[BUF_MAX];
-	size_t size;
-
-	fps = fopen(src, "rb");
-	if (fps == NULL) {
-		_E("Failed to open src file '%s': %m", src);
-		return -errno;
-	}
-
-	fpd = fopen(dest, "wb");
-	if (fpd == NULL) {
-		_E("Failed to open dest file '%s': %m", dest);
-		return -errno;
-	}
-
-	while ((size = fread(buf, 1, BUF_MAX, fps))) {
-		fwrite(buf, 1, size, fpd);
-	}
-
-	return RESOURCED_ERROR_NONE;
 }

@@ -64,14 +64,13 @@ static gpointer _create_reset_restriction(
 		_E("Malloc of resourced_restriction_info failed\n");
 		return NULL;
 	}
-	res_data->app_id = strndup(info->app_id, strlen(info->app_id));
+	res_data->app_id = strdup(info->app_id);
 	res_data->iftype = iftype;
 	res_data->rcv_limit = info->rcv_limit;
 	res_data->send_limit = info->send_limit;
 	res_data->rst_state = info->rst_state;
 	res_data->quota_id = info->quota_id;
 	res_data->roaming = info->roaming;
-	res_data->imsi = strndup(info->imsi, strlen(info->imsi));
 	return res_data;
 }
 
@@ -88,13 +87,10 @@ static resourced_cb_ret _restriction_iter(
 
 	_SI("we have restriction for appid %s and check it for ifindex %d\n",
 	   info->app_id, context->ifindex);
-	const char *imsi_hash = get_imsi_hash(get_current_modem_imsi());
-	if (imsi_hash && info->imsi  && !strcmp(imsi_hash, info->imsi)) {
-		gpointer data = _create_reset_restriction(info, context->ifindex);
-		if (data)
-			context->restrictions = g_list_prepend(context->restrictions,
-				data);
-	}
+	gpointer data = _create_reset_restriction(info, context->ifindex);
+	if (data)
+		context->restrictions = g_list_prepend(context->restrictions,
+			data);
 	return RESOURCED_CONTINUE;
 }
 
@@ -296,9 +292,10 @@ void reactivate_restrictions(void)
 	char buf[256];
 	struct if_nameindex *ids = if_nameindex();
 
+	strerror_r(errno, buf, sizeof(buf));
 	ret_msg_if(ids == NULL,
 			 "Failed to initialize iftype table! errno: %d, %s",
-			 errno, strerror_r(errno, buf, sizeof(buf)));
+			 errno, buf);
 
 	for (i = 0; ids[i].if_index != 0; ++i) {
 		if (!is_address_exists(ids[i].if_name))

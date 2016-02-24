@@ -17,29 +17,16 @@
  *
  */
 
-
-/*
- * @file time-helper.h
- * @desc Helper functions for to get timestamp and time difference
- */
-
-#ifndef _RESOURCED_TIME_HELPER_H_
-#define _RESOURCED_TIME_HELPER_H_
-
-#include "resourced.h"
-
 /**
- * @desc gets current timestamp in "%y%m%d%H%M%S%ms" format
- * @param ts - timestamp string
- * @return None
- */
-void time_stamp(char *ts);
+ * @file logging-battery.h
+ * @desc define structures and functions for logging.
+ **/
 
-/**
- * @desc gets time difference between two timeval
- * @param diff-differece, start-starting timeval, end-ending timeval
- * @return None
- */
-void time_diff(struct timeval *diff, struct timeval *start, struct timeval *end);
+#ifndef __LOGGING_BATTERY_H__
+#define __LOGGING_BATTERY_H__
 
-#endif  /*_RESOURCED_TIME_HELPER_H_*/
+#include <stdio.h>
+
+int logging_battery_init(void *data);
+int logging_battery_exit(void *data);
+#endif /*__LOGGING_BATTERY_H__*/

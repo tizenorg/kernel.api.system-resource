@@ -15,8 +15,6 @@
 #define TIZEN_DEBUG_MODE_FILE   "/opt/etc/.debugmode"
 #define DUMP_PATH "/usr/bin/all_log_dump.sh"
 #define REBOOT_PATH "/usr/sbin/reboot"
-#define WAIT_TIMEOUT 10
-#define MAX_TIMES 30
 
 static int check_debugenable(void)
 {
@@ -28,7 +26,7 @@ static int check_debugenable(void)
 
 static int run_exec(char **argv)
 {
-	int status = 0, times = 0, wpid;
+	int status = 0;
 	pid_t pid = 0;
 	char buf[256];
 
@@ -43,31 +41,27 @@ static int run_exec(char **argv)
 	if (pid == 0) {
 		setpgid(0, 0);
 		if (execv(argv[0], argv) == -1) {
-			_E("Error execv: %s.\n", strerror_r(errno, buf, sizeof(buf)));
+			strerror_r(errno, buf, sizeof(buf));
+			_E("Error execv: %s.\n", buf);
 			_exit(-1);
 		}
 		_exit(1);
 	}
 	do {
-		wpid = waitpid(pid, &status, WNOHANG);
-		if (wpid == 0) {
-			if (times < MAX_TIMES) {
-				sleep(WAIT_TIMEOUT);
-				times ++;
-			} else {
-				_D("timeout!!, kill child process(%s)\n",
-				    argv[0]);
-				kill(pid, SIGKILL);
-			}
+		if (waitpid(pid, &status, 0) == -1) {
+			if (errno != EINTR)
+				return -1;
 		}
-	} while (wpid == 0 && times <= MAX_TIMES);
-	return 0;
+		else {
+			return status;
+		}
+	} while (1);
 }
 
 int main(int argc, char *argv[])
 {
 	int checkfd;
-	char *dumpargv[3] = {DUMP_PATH, "urgent", NULL};
+	char *dumpargv[3] = {DUMP_PATH, NULL, NULL};
 	char *rebootargv[4] = {REBOOT_PATH, "silent", NULL, NULL};
 	DIR *dir = 0;
 

@@ -31,7 +31,7 @@
 #include "resourced.h"
 #include "trace.h"
 #include "macro.h"
-#include "memory-common.h"
+#include "memcontrol.h"
 #include "cgroup.h"
 
 #include <stdlib.h>
@@ -207,8 +207,8 @@ int memcg_get_usage(struct memcg_info *mi, unsigned int *usage_bytes)
 int memcg_get_pids(struct memcg_info *mi, GArray *pids)
 {
 	FILE *f;
+	char buf[MAX_PATH_LENGTH] = {0,};
 	pid_t tpid;
-	char buf[MAX_PATH_LENGTH] = {0, };
 
 	if (pids == NULL)
 		return RESOURCED_ERROR_FAIL;
@@ -225,7 +225,7 @@ int memcg_get_pids(struct memcg_info *mi, GArray *pids)
 		tpid = atoi(buf);
 		g_array_append_val(pids, tpid);
 	}
-	fclose(f);
 
+	fclose(f);
 	return RESOURCED_ERROR_NONE;
 }

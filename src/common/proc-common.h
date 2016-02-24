@@ -31,7 +31,7 @@
 
 #include "resourced.h"
 #include "const.h"
-#include "memory-common.h"
+#include "memcontrol.h"
 
 typedef GSList *pid_list;
 
@@ -43,7 +43,6 @@ enum application_type {
 	PROC_TYPE_GROUP,
 	PROC_TYPE_WATCH,
 	PROC_TYPE_WIDGET,
-	PROC_TYPE_MAX,
 };
 
 enum proc_state {
@@ -106,28 +105,24 @@ struct proc_program_info {
 	GSList *svc_list;
 };
 
-struct proc_memory_state {
-	struct memcg_info *memcg_info;
-	int memcg_idx;
-	int oom_score_adj;
-};
-
 struct proc_app_info {
 	char *appid;
+	struct resourced_appinfo *ai;
+	enum application_type type;
 	pid_t main_pid;
 	pid_list childs;
+	struct proc_program_info *program;
 	int proc_exclude;
 	int runtime_exclude;
+	int memcg_idx;
+	struct memcg_info *memcg_info;
 	int flags;
 	int lru_state;
 	enum proc_state state;
-	enum application_type type;
-	struct resourced_appinfo *ai;
-	struct proc_program_info *program;
-	struct proc_memory_state memory;
-
 };
 
+int get_proc_freezer_late_control(void);
+void set_proc_freezer_late_control(int value);
 int proc_get_freezer_status(void);
 
 struct proc_app_info *find_app_info(const pid_t pid);
@@ -136,13 +131,8 @@ struct proc_app_info *find_app_info_by_appid(const char *appid);
 struct child_pid *new_pid_info(const pid_t pid);
 int proc_get_id_info(struct proc_status *ps, char **app_name, char **pkg_name);
 
-/**
- * @desc set memory field in proc_app_info sturcture of selected pai, the data
- * are used by lowmem module.
- * @return void
- */
-void proc_set_process_memory_state(struct proc_app_info *pai,
-		int memcg_idx, struct memcg_info *memcg_info, int oom_score_adj);
+void proc_set_process_info_memcg(struct proc_app_info *ppi,
+	int memcg_idx, struct memcg_info *memcg_info);
 
 int proc_get_appflag(const pid_t pid);
 
@@ -156,7 +146,5 @@ int proc_get_svc_state(struct proc_program_info *ppi);
 bool proc_check_lru_suspend(int val, int lru);
 
 enum proc_state proc_check_suspend_state(struct proc_app_info *pai);
-
-int proc_debug_enabled(void);
 
 #endif /* __PROC_COMMON_H__ */

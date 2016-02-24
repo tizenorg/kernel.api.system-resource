@@ -61,8 +61,7 @@ CREATE TABLE IF NOT EXISTS restrictions (
   roaming INT,
   reserved TEXT,
   ifname TEXT,
-  imsi TEXT,
-  PRIMARY KEY (binpath, iftype, ifname, quota_id, imsi)
+  PRIMARY KEY (binpath, iftype, ifname, quota_id)
 );
 
 CREATE INDEX IF NOT EXISTS binpath_restrictions_idx ON restrictions(binpath, iftype, ifname);

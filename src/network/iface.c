@@ -274,8 +274,9 @@ int init_iftype(void)
 	GTree *iftypes_next = create_iface_tree();
 
 	if (ids == NULL) {
+		strerror_r(errno, buf, sizeof(buf));
 		_E("Failed to initialize iftype table! errno: %d, %s",
-			errno, strerror_r(errno, buf, sizeof(buf)));
+			errno, buf);
 		return RESOURCED_ERROR_FAIL;
 	}
 

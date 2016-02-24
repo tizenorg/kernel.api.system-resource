@@ -44,6 +44,9 @@ int smaps_helper_get_vmsize(pid_t pid, unsigned *vmsize, unsigned *vmrss);
 int smaps_helper_init(void);
 void smaps_helper_free(void);
 
+unsigned int get_available(void);
+unsigned int get_mem_usage(void);
+
 enum memory_level {
 	MEMORY_LEVEL_NORMAL,
 	MEMORY_LEVEL_LOW,

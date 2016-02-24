@@ -37,7 +37,7 @@
 #include "config-parser.h"
 
 #ifdef HEART_SUPPORT
-#include "heart-common.h"
+#include "logging-common.h"
 #endif
 
 #define UPDATE_INTERVAL	DAY_TO_SEC(1)
@@ -76,7 +76,7 @@ static Eina_Bool appusage_update_cb(void *data)
 	if (!data)
 		return ECORE_CALLBACK_CANCEL;
 
-	ret = heart_cpu_get_appusage_list(apps_htab, favorite_count);
+	ret = logging_cpu_get_appusage_list(apps_htab, favorite_count);
 	if (!ret) {
 		_I("most_recently_used_list updated");
 		g_hash_table_foreach(apps_htab, print_favorite_list, NULL);
@@ -120,7 +120,7 @@ static int proc_appusage_table_init(void)
 	favorite_count = g_hash_table_size(appusage_favorite_htab);
 
 #ifdef HEART_SUPPORT
-	ret = heart_cpu_get_appusage_list(appusage_favorite_htab,
+	ret = logging_cpu_get_appusage_list(appusage_favorite_htab,
 			favorite_count);
 	if (!ret)
 		_I("most_recently_used_list updated");

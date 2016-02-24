@@ -4,36 +4,27 @@ CMAKE_MINIMUM_REQUIRED (VERSION 2.6)
 # libresourced uses it
 PROJECT(resource_d)
 
-MACRO(INSTALL_SYMLINK _filepath _sympath)
-  GET_FILENAME_COMPONENT(_symname ${_sympath} NAME)
-  GET_FILENAME_COMPONENT(_installdir ${_sympath} PATH)
-
-  EXECUTE_PROCESS(COMMAND "${CMAKE_COMMAND}" -E create_symlink
-    ${_filepath}
-    ${CMAKE_CURRENT_BINARY_DIR}/${_symname})
-  INSTALL(FILES ${CMAKE_CURRENT_BINARY_DIR}/${_symname}
-    DESTINATION ${_installdir})
-ENDMACRO(INSTALL_SYMLINK)
-
 SET(CMAKE_EXTRA_INCLUDE_FILES unistd.h)
 
 INCLUDE_DIRECTORIES(${RESOURCED_INCLUDEDIR}
   ${RESOURCED_SOURCE_DIR}
   ${HEART_SOURCE_DIR}/include
   ${MEMORY_SOURCE_DIR}
+  ${FREEZER_SOURCE_DIR}/include
   ${PROC-STAT_SOURCE_DIR}/include
   ${APP-STAT_SOURCE_DIR}/include
   ${NETWORK_SOURCE_DIR}/include
   ${BLOCK_SOURCE_DIR}/include
   ${RESOURCED_DBUS_SOURCE_DIR}/include
-  ${FREEZER_SOURCE_DIR}/include
-)
+  )
 
 SET (HEADERS
   ${NETWORK_SOURCE_DIR}/include/datausage-vconf-callbacks.h
   ${NETWORK_SOURCE_DIR}/include/iface-cb.h
+  ${FREEZER_SOURCE_DIR}/include/freezer-vconf-callbacks.h
   ${INCLUDE_MEMORY_DIR}/helper.h
 )
+
 FILE(GLOB FILE "${INCLUDE_COMMON_DIR}/*.h")
 FOREACH(HEADER ${FILE})
 	SET(HEADERS ${HEADERS} ${HEADER})
@@ -49,7 +40,6 @@ SET (SOURCES
   ${PROC-STAT_SOURCE_DIR}/proc-appusage.c
   ${PROC-STAT_SOURCE_DIR}/proc-usage-stats.c
   ${PROC-STAT_SOURCE_DIR}/proc-usage-stats-helper.c
-  ${SLUGGISH_SOURCE_DIR}/sluggish.c
   ${RESOURCED_SOURCE_DIR}/init.c
   ${RESOURCED_SOURCE_DIR}/main.c
   ${MEMORY_SOURCE_DIR}/helper.c
@@ -121,12 +111,14 @@ IF("${NETWORK_MODULE}" STREQUAL "ON")
 
 ENDIF()
 
-
 #freezer module
 IF("${FREEZER_MODULE}" STREQUAL "ON")
-   SET(SOURCES ${SOURCES} ${FREEZER_SOURCE_DIR}/freezer.c)
-ELSE()
-   SET(SOURCES ${SOURCES} ${FREEZER_SOURCE_DIR}/freezer-common.c)
+  SET(SOURCES ${SOURCES}
+    ${FREEZER_SOURCE_DIR}/freezer-cgroup.c
+    ${FREEZER_SOURCE_DIR}/freezer-process.c
+    ${FREEZER_SOURCE_DIR}/freezer-vconf-callbacks.c
+    ${FREEZER_SOURCE_DIR}/freezer.c
+    )
 ENDIF()
 
 #resourced DBus module
@@ -143,13 +135,16 @@ ENDIF()
 #heart module
 IF("${HEART_MODULE}" STREQUAL "ON")
   SET(SOURCES ${SOURCES}
-    ${HEART_SOURCE_DIR}/logging.c
     ${HEART_SOURCE_DIR}/heart.c
-    ${HEART_SOURCE_DIR}/heart-abnormal.c
     ${HEART_SOURCE_DIR}/heart-cpu.c
     ${HEART_SOURCE_DIR}/heart-memory.c
     ${HEART_SOURCE_DIR}/heart-battery.c
-    ${HEART_SOURCE_DIR}/heart-storage.c
+    ${HEART_SOURCE_DIR}/logging.c
+    ${HEART_SOURCE_DIR}/logging-cpu.c
+    ${HEART_SOURCE_DIR}/logging-memory.c
+    ${HEART_SOURCE_DIR}/logging-battery.c
+    ${HEART_SOURCE_DIR}/logging-export.c
+    ${HEART_SOURCE_DIR}/logging-storage.c
     ${HEART_SOURCE_DIR}/decision.c
     ${HEART_SOURCE_DIR}/decision-memory.c
     )
@@ -161,8 +156,13 @@ IF("${MEMORY_MODULE}" STREQUAL "ON")
   SET(SOURCES ${SOURCES}
     ${MEMORY_SOURCE_DIR}/lowmem-dbus.c
     ${MEMORY_SOURCE_DIR}/memcontrol.c
-    ${MEMORY_SOURCE_DIR}/vmpressure-lowmem-handler.c
-    )
+  )
+  IF("${MEMORY_VMPRESSURE}" STREQUAL "ON")
+    SET(SOURCES ${SOURCES} ${MEMORY_SOURCE_DIR}/vmpressure-lowmem-handler.c)
+    ADD_DEFINITIONS("-DVMPRESURE_LOWMEM")
+  ELSE()
+    SET(SOURCES ${SOURCES} ${MEMORY_SOURCE_DIR}/lowmem-handler.c)
+  ENDIF()
   ADD_DEFINITIONS("-DMEMORY_SUPPORT")
 ENDIF()
 
@@ -201,8 +201,8 @@ SET (REQUIRES_LIST ${REQUIRES_LIST}
 	vconf
 	vconf-internal-keys
 	ecore-file
-	edbus
 	eina
+	edbus
 	libsystemd-daemon
 	leveldb
 	eventsystem
@@ -231,7 +231,7 @@ TARGET_LINK_LIBRARIES(hashtest ${daemon_pkgs_LDFLAGS})
 
 ADD_EXECUTABLE (${PROJECT_NAME} ${HEADERS} ${SOURCES})
 TARGET_LINK_LIBRARIES(${PROJECT_NAME}
-  ${daemon_pkgs_LDFLAGS} "-pie -lrt -lm -ldl"
+  ${daemon_pkgs_LDFLAGS} "-pie -lrt -lm"
 )
 
 IF("${NETWORK_MODULE}" STREQUAL "ON")
@@ -310,31 +310,8 @@ ENDIF()
 IF("${FREEZER_MODULE}" STREQUAL "ON")
   INSTALL(FILES ${FREEZER_SOURCE_DIR}/freezer.conf
     DESTINATION /etc/resourced RENAME freezer.conf)
-  INSTALL(FILES ${FREEZER_SOURCE_DIR}/libsystem-freezer.so.${ARCH} DESTINATION lib
-    RENAME libsystem-freezer.so)
 ENDIF()
 
 INSTALL(FILES ${PROC-STAT_SOURCE_DIR}/proc.conf
     DESTINATION /etc/resourced RENAME proc.conf)
 
-IF("${SLP_TESTS}" STREQUAL "ON")
-ADD_EXECUTABLE(test-file-helper ${HEADERS}
-  ${COMMON_SOURCE_DIR}/file-helper.c
-  ${COMMON_SOURCE_DIR}/file-helper.h
-  ${TEST_DIR}/test-file-helper.c)
-TARGET_LINK_LIBRARIES(test-file-helper ${daemon_pkgs_LDFLAGS})
-INSTALL(TARGETS test-file-helper DESTINATION /usr/lib/resourced/test)
-ENDIF()
-
-ADD_EXECUTABLE(mem-stress ${HEADERS}
-  ${COMMON_SOURCE_DIR}/macro.h
-  ${COMMON_SOURCE_DIR}/util.c
-  ${COMMON_SOURCE_DIR}/util.h
-  ${COMMON_SOURCE_DIR}/config-parser.c
-  ${COMMON_SOURCE_DIR}/config-parser.h
-  ${CMAKE_SOURCE_DIR}/src/mem-stress/mem-stress.c)
-TARGET_LINK_LIBRARIES(mem-stress ${daemon_pkgs_LDFLAGS})
-INSTALL(TARGETS mem-stress DESTINATION ${MAKE_INSTALL_PREFIX}/usr/bin)
-INSTALL(FILES ${CMAKE_SOURCE_DIR}/src/mem-stress/mem-stress.service
-  DESTINATION ${MAKE_INSTALL_PREFIX}/usr/lib/systemd/system)
-INSTALL_SYMLINK(../mem-stress.service ${MAKE_INSTALL_PREFIX}/usr/lib/systemd/system/graphical.target.wants/mem-stress.service)

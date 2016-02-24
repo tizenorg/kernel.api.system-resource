@@ -25,11 +25,11 @@
  *
  */
 
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <glib.h>
 
-#include "notifier.h"
 #include "trace.h"
 #include "module.h"
 #include "macro.h"
@@ -37,7 +37,6 @@
 #include "logging.h"
 #include "resourced.h"
 #include "config-parser.h"
-#include "edbus-handler.h"
 
 static GSList *heart_module;  /* module list */
 
@@ -119,52 +118,9 @@ static int heart_load_config(struct parse_result *result, void *user_data)
 	return RESOURCED_ERROR_NONE;
 }
 
-static DBusMessage *edbus_update_data_list(E_DBus_Object *obj, DBusMessage *msg)
-{
-	int ret;
-	DBusMessage *reply = NULL;
-
-	ret = dbus_message_get_args(msg, NULL, DBUS_TYPE_INVALID);
-	reply = dbus_message_new_method_return(msg);
-	if (!ret) {
-		_E("Wrong message arguments!");
-		return reply;
-	}
-
-	resourced_notify(RESOURCED_NOTIFIER_DATA_UPDATE, NULL);
-
-	logging_save_to_storage(true);
-	/* update data list from db */
-	logging_update(true);
-
-	return reply;
-}
-
-static DBusMessage *edbus_flush_cache(E_DBus_Object *obj, DBusMessage *msg)
-{
-	int ret;
-	DBusMessage *reply = NULL;
-
-	ret = dbus_message_get_args(msg, NULL, DBUS_TYPE_INVALID);
-	reply = dbus_message_new_method_return(msg);
-	if (!ret) {
-		_E("Wrong message arguments!");
-		return reply;
-	}
-	/* flush module cache */
-	logging_save_to_storage(true);
-
-	return reply;
-}
-
-static const struct edbus_method edbus_methods[] = {
-	{ "UpdateDataList", NULL, NULL, edbus_update_data_list },
-	{ "Flush", NULL, NULL, edbus_flush_cache }
-};
-
 static int resourced_heart_init(void *data)
 {
-	int ret, module_num = 0;
+	int module_num = 0;
 
 	config_parse(HEART_CONF_FILE_PATH, heart_load_config, &module_num);
 
@@ -173,32 +129,8 @@ static int resourced_heart_init(void *data)
 		return RESOURCED_ERROR_NONE;
 	}
 
-	ret = edbus_add_methods(RESOURCED_PATH_LOGGING, edbus_methods, ARRAY_SIZE(edbus_methods));
-	if (ret != RESOURCED_ERROR_NONE) {
-		_E("DBus method registration for %s is failed", RESOURCED_PATH_LOGGING);
-	}
-
 	heart_module_init(data);
 
-	return RESOURCED_ERROR_NONE;
-}
-
-static int resourced_heart_dump(FILE *fp, int mode, void *data)
-{
-	GSList *iter;
-	const struct heart_module_ops *module;
-	int ret = RESOURCED_ERROR_NONE;
-
-	logging_save_to_storage(true);
-
-	gslist_for_each_item(iter, heart_module) {
-		module = (struct heart_module_ops *)iter->data;
-		_D("Dump [%s] module\n", module->name);
-		if (module->dump)
-			ret = module->dump(fp, mode, data);
-		if (ret != RESOURCED_ERROR_NONE)
-			_E("Fail to dump [%s] module\n", module->name);
-	}
 	return RESOURCED_ERROR_NONE;
 }
 
@@ -213,7 +145,6 @@ static const struct module_ops heart_modules_ops = {
 	.priority	= MODULE_PRIORITY_HIGH,
 	.name		= "HEART",
 	.init		= resourced_heart_init,
-	.dump		= resourced_heart_dump,
 	.exit		= resourced_heart_exit,
 };
 
